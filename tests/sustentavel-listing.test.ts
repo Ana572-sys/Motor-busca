@@ -1,0 +1,4 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {parseSustentavel} from '../lib/sustentavel-listing.ts';
+test('Sustentável 2030 conserva estado por validar e recusa ligações externas',()=>{let html='<title>Avisos - Sustentável 2030</title><div class="grid-col dmach-grid-item estado-aberto post_id_12"><div data-link-url="https://sustentavel2030.gov.pt/aviso/12/"><div class="avisos-thumbnail"><h2 class="dmach-acf-value">Aviso</h2><h3>PACS-1 | Suspensão</h3><div class="start-date"><p class="dmach-acf-value">2026-01-01</p></div></div></div></div>';let rows=parseSustentavel(html);assert.equal(rows.length,1);assert.equal(rows[0].sourceState,'por validar');assert.match(rows[0].code,/Suspensão/);assert.throws(()=>parseSustentavel(html.replace('https://sustentavel2030.gov.pt/aviso/12/','https://exemplo.pt/aviso/12/')));});

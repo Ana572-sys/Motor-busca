@@ -1,0 +1,21 @@
+-- NÃO EXECUTAR até existir um processador de fila e um projeto pronto para operação.
+-- pg_cron usa UTC: as duas invocações cobrem a mudança sazonal em Lisboa.
+-- A função verifica a hora local e a data para não duplicar a pesquisa.
+-- Substituir pelo procedimento de instalação aprovado e verificar a extensão pg_cron no projeto.
+-- select cron.schedule('radar-segunda-verao', '30 7 * * 1', $$select public.enqueue_weekly_scan();$$);
+-- select cron.schedule('radar-segunda-inverno', '30 8 * * 1', $$select public.enqueue_weekly_scan();$$);
+-- Para um processador publicado e validado, pode ser criado um terceiro trabalho
+-- que verifica a fila todas as minutas. Os dois valores ficam no Vault, sem os
+-- escrever neste ficheiro. Instalar pg_net e verificar as permissões primeiro.
+-- ATENÇÃO: durante o envio pg_net coloca o cabeçalho na sua fila; utilizadores
+-- com acesso direto à base de dados podem lê-lo. Verificar esses acessos antes.
+-- select cron.schedule('radar-processador', '* * * * *', $job$
+--   select net.http_post(
+--     url := (select decrypted_secret from vault.decrypted_secrets where name='radar_worker_url'),
+--     headers := jsonb_build_object('Content-Type','application/json',
+--       'Authorization','Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name='radar_worker_secret')),
+--     body := '{}'::jsonb, timeout_milliseconds := 60000
+--   ) where exists (select 1 from public.scan_sources where status in ('na fila','em curso'));
+-- $job$);
+-- Monitorizar cron.job_run_details E net._http_response: o agendamento de uma
+-- chamada HTTP não confirma que o processador tenha concluído com sucesso.

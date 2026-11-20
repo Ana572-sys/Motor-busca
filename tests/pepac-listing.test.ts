@@ -1,0 +1,3 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {parsePepacItem,fetchPepac} from '../lib/pepac-listing.ts';
+test('PEPAC não presume estado ou elegibilidade',()=>{const x=parsePepacItem({id:1,title:{rendered:'Apoio &amp; investimento'},link:'https://pepacc.pt/concursos/exemplo/'},'competition');assert.equal(x.title,'Apoio & investimento');assert.equal(x.sourceState,'por validar');assert.throws(()=>parsePepacItem({id:1,title:{rendered:'x'},link:'https://example.com/x'},'competition'));});
+test('PEPAC rejeita total de páginas inconsistente',async()=>{const fake=async()=>new Response('[]',{headers:{'x-wp-total':'1','x-wp-totalpages':'1'}});await assert.rejects(()=>fetchPepac(fake as typeof fetch),/incompleta/);});

@@ -1,0 +1,1 @@
+import {load} from 'cheerio';let h=await(await fetch('https://eismea.ec.europa.eu/funding-opportunities_en')).text(),$=load(h);console.log($('main a[href]').map((i,e)=>({t:$(e).text().trim().replace(/\s+/g,' ').slice(0,100),h:$(e).attr('href')})).get().slice(0,35));

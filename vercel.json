@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["dub1"],
+  "schedules": {
+    "weekly-radar-gi": {
+      "schedule": "30 8 * * 1",
+      "timezone": "Europe/Lisbon",
+      "jitter": 15,
+      "path": "/api/cron/weekly",
+      "requestMethod": "GET"
+    }
+  }
+}

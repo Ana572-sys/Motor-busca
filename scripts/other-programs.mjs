@@ -1,0 +1,1 @@
+for(const u of ['https://www.fami2030.gov.pt/avisos/','https://sustentavel2030.gov.pt/avisos/','https://mar2030.pt/avisos/'])try{const r=await fetch(u,{signal:AbortSignal.timeout(10000)}),h=await r.text();console.log(u,r.status,r.url,h.length,[...new Set([...h.matchAll(/"programaId"\s*:\s*"(\d+)"/g)].map(x=>x[1]))]);}catch(e){console.log(u,e.message,e.cause?.code)}

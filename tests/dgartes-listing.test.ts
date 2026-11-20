@@ -1,0 +1,4 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {parseDgPage} from '../lib/dgartes-listing.ts';
+const empty='<title>Candidaturas Abertas | DGARTES</title><div class="view-apoio-as-artes lista-apoios-decorrer"></div>';
+test('DGARTES aceita lista identificada vazia e recusa estrutura inesperada',()=>{assert.equal(parseDgPage(empty).items.length,0);assert.throws(()=>parseDgPage('<title>Erro</title>'));});
+test('DGARTES lê título e ligação oficial sem presumir elegibilidade',()=>{const html=empty.replace('</div>','<div class="views-row"><div class="programmes_page_title"><a href="#">Apoio</a></div><div class="programmes_page_summary"><div class="link"><a href="../apoio/123">Ver mais</a></div></div></div></div>');const item=parseDgPage(html).items[0];assert.equal(item.documentUrl,'https://www.dgartes.gov.pt/pt/apoio/123');assert.equal(item.sourceState,'por validar');});

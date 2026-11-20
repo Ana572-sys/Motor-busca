@@ -1,0 +1,1 @@
+const s=await(await fetch('https://interreg.eu/app/assets/main.js',{signal:AbortSignal.timeout(20000)})).text();console.log('bytes',s.length);for(const m of s.matchAll(/\/api\/|calls-for-projects|eligibleCountries|loadCalls/gi)){console.log('context',s.slice(Math.max(0,m.index-160),m.index+500).replace(/\s+/g,' '));if(m.index>1000000)break;}

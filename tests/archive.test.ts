@@ -1,0 +1,4 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import yazl from 'yazl';import {inspectArchive} from '../lib/archive.ts';
+async function archive(names:string[]){const zip=new yazl.ZipFile();for(const name of names)zip.addBuffer(Buffer.from('conteúdo'),name);zip.end();const chunks:Buffer[]=[];for await(const chunk of zip.outputStream)chunks.push(Buffer.from(chunk));return Buffer.concat(chunks);}
+test('inventário distingue PDF, ZIP aninhado e Office sem descomprimir',async()=>{const result=await inspectArchive(await archive(['aviso.pdf','anexos.zip','modelo.xlsx']));assert.deepEqual(result.entries.map(e=>e.kind),['pdf','zip','office']);assert.equal(result.requiresReview,true);});
+test('recusa arquivos inválidos e com demasiadas entradas',async()=>{await assert.rejects(()=>inspectArchive(new Uint8Array([1,2,3,4])));const large=await archive(Array.from({length:101},(_,i)=>`${i}.pdf`));await assert.rejects(()=>inspectArchive(large));});

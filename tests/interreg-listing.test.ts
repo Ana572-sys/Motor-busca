@@ -1,0 +1,4 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {parseInterregHit,fetchInterreg} from '../lib/interreg-listing.ts';
+const item={pageId:123,nodeName:'Call',contentUrl:'/calls-for-projects/call/',contentType:'callForProjectsPage',callStatus:'Open',callEligibleCountryNames:['Portugal'],associatedProgrammes:['Interreg'],callDeadlineDate:'2027-03-04T00:00:00'};
+test('Interreg exige Portugal e estado aberto',()=>{assert.equal(parseInterregHit(item).endsAt,'2027-03-04');assert.throws(()=>parseInterregHit({...item,callEligibleCountryNames:['Spain']}));assert.throws(()=>parseInterregHit({...item,callStatus:'Closed'}));});
+test('Interreg rejeita paginação incompleta',async()=>{const fake=async()=>new Response(JSON.stringify({page:0,nbHits:2,nbPages:1,hits:[item]}));await assert.rejects(()=>fetchInterreg(fake as typeof fetch),/integralmente/);});

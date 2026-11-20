@@ -1,0 +1,10 @@
+import {load} from 'cheerio';
+const response=await fetch('https://compete2030.gov.pt/avisos/?per_page=24',{signal:AbortSignal.timeout(15000)});
+const html=await response.text(),$=load(html);
+console.log('http',response.status,'bytes',html.length,'title',$('title').text());
+$('a[href*="/avisos/"]').slice(0,12).each((_,e)=>console.log('link',$(e).attr('href'),$(e).text().trim().slice(0,120)));
+console.log('pagination',$('[class*=pagination]').text().trim().slice(0,500));
+const el=$('h4').filter((_,e)=>$(e).text().includes('COMPETE2030-')).first();console.log('card',el.parent().parent().html()?.slice(0,9000));
+console.log('ancestor',el.parents().slice(0,7).map((_,e)=>`${e.tagName}:${$(e).attr('class')}`).get());
+console.log('pager',$('[class*=pagination]').first().html()?.slice(0,7000));
+console.log('counts', $('h3.card-title').length,$('.date-badges').length);

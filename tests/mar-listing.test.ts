@@ -1,0 +1,4 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {parseMar} from '../lib/mar-listing.ts';
+test('MAR devolve apenas avisos sinalizados abertos e valida endereço do documento',()=>{const data=[{id:1,attributes:{Titulo:'Aviso',Local:'Açores',aberto:true,aviso:{data:{attributes:{url:'/uploads/aviso.pdf'}}}}},{id:2,attributes:{Titulo:'Antigo',aberto:null}}];const result=parseMar({data,meta:{pagination:{page:1,pageCount:1,total:2}}});assert.equal(result.candidates.length,1);assert.equal(result.candidates[0].documentUrl,'https://backoffice.mar2030.pt/uploads/aviso.pdf');assert.equal(result.candidates[0].sourceState,'por validar');data[0].attributes.aviso!.data.attributes.url='https://exemplo.pt/falso.pdf';assert.throws(()=>parseMar({data,meta:{pagination:{page:1,pageCount:1,total:2}}}));});

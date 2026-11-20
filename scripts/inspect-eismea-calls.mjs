@@ -1,0 +1,2 @@
+import {load} from 'cheerio';const u='https://eismea.ec.europa.eu/funding-opportunities/calls-proposals_en',r=await fetch(u),h=await r.text(),$=load(h);console.log(r.status,h.length,$('title').text(),$('main').text().replace(/\s+/g,' ').slice(0,1800));console.log($('main a[href]').map((i,e)=>({t:$(e).text().trim().slice(0,80),h:$(e).attr('href')})).get().slice(0,20));
+let a=$('main a[href*="calls-proposals/"]').first();console.log('CARD',a.parents().slice(0,5).map((i,e)=>e.attribs.class).get());console.log(a.parent().parent().parent().html()?.slice(0,4000));

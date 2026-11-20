@@ -1,0 +1,8 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {parsePisListing,fetchPisListing} from '../lib/pis-listing.ts';
+const fixture=(pages='1',closing='2026-07-31')=>`<div class="jet-listing-grid__items" data-pages="${pages}"><div class="jet-listing-grid__item" data-post-id="15529"><div class="jet-listing-dynamic-field__content"></div><div class="jet-listing-dynamic-field__content">Alentejo</div><div class="jet-listing-dynamic-field__content"><a href="https://pis.portugal2030.pt/documento.zip">ALENTEJO-2026-21</a></div><div class="jet-listing-dynamic-field__content">2026-05-15</div><div class="jet-listing-dynamic-field__content">${closing}</div></div></div>`;
+test('extrai apenas os campos expressos da listagem',()=>{const [item]=parsePisListing(fixture());assert.equal(item.code,'ALENTEJO-2026-21');assert.equal(item.region,'Alentejo');assert.equal(item.closing_date,'2026-07-31');assert.equal(item.content_hash.length,64);assert.equal('admission' in item,false);});
+test('rejeita paginação incompleta, datas inválidas e HTML inesperado',()=>{assert.throws(()=>parsePisListing(fixture('2')));assert.throws(()=>parsePisListing(fixture('1','2026-02-30')));assert.throws(()=>parsePisListing('<html></html>'));});
+test('efetua pedido delimitado e rejeita formato de resposta inesperado',async()=>{
+ const url='https://pis.portugal2030.pt/concursos-pagina/';let method='';const fetcher:typeof fetch=async(_input,init)=>{method=String(init?.method);return Response.json({success:true,data:{html:fixture()}})};
+ assert.equal((await fetchPisListing(url,fetcher)).candidates.length,1);assert.equal(method,'POST');await assert.rejects(()=>fetchPisListing(url,async()=>Response.json({success:false})));
+});

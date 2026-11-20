@@ -1,0 +1,6 @@
+import {load} from 'cheerio';const response=await fetch('https://recuperarportugal.gov.pt/candidaturas-prr/',{signal:AbortSignal.timeout(20000)});const html=await response.text(),$=load(html);console.log('response',response.status,html.length,'title',$('title').text());
+console.log('links',$('a[href*="/candidatura/"]').length);$('a[href*="/candidatura/"]').slice(0,5).each((_,e)=>console.log($(e).attr('href'),$(e).text().trim().slice(0,100)));console.log('scripts',$('script[src]').map((_,e)=>$(e).attr('src')).get().filter(s=>/candidat|aviso/i.test(s)).slice(0,20));
+for(const term of ['ajaxurl','wp-json','admin-ajax','candidatura','aberto'])console.log(term,(html.match(new RegExp(term,'gi'))||[]).length);
+console.log('scripts-all',$('script[src]').map((_,e)=>$(e).attr('src')).get().slice(-30));
+for(const term of ['admin-ajax','Pesquisar Avisos','candidaturas-prr','Abertos']){const i=html.indexOf(term);console.log('context',term,html.slice(Math.max(0,i-300),i+700).replace(/\s+/g,' '));}
+console.log('iframes',$('iframe').map((_,e)=>$(e).attr('src')).get());console.log('scripts-theme',$('script[src]').map((_,e)=>$(e).attr('src')).get().filter(s=>/themes|custom|prr/i.test(s)).slice(0,30));

@@ -1,0 +1,1 @@
+let s=await(await fetch('https://www.iapmei.pt/assets/js/index.js')).text();for(const term of ['fetch(','XMLHttpRequest','.ashx','api/','.json','Pesquisa','componente','incentivo']){let pos=0,n=0;while((pos=s.toLowerCase().indexOf(term.toLowerCase(),pos))>=0&&n++<4){console.log('\n',term,s.slice(Math.max(0,pos-120),pos+280).replace(/\s+/g,' '));pos+=term.length;}}
