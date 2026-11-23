@@ -19,10 +19,10 @@ export async function finalizeRadarUpdateRun(db:SupabaseClient,runId:string,scan
  }
  let analysisStats={total:0,complete:0,incomplete:0,failed:0,pending:0,running:0,missing:0};
  try{analysisStats=await currentRadarAnalysisStats(db);}catch{analysisStats={...analysisStats,missing:1};}
- const {storagePath,markdownError}=await refreshOpenNoticesMarkdown(db);
+ const {storagePath,markdownError,markdownErrorCode}=await refreshOpenNoticesMarkdown(db);
  const failedSources=failed+incomplete,queuePending=analysisStats.pending+analysisStats.running;
  const workerStarted=Boolean(process.env.OPENAI_API_KEY&&queuePending&&await startRadarAnalysisWorker(runId));
  const analysisErrors=analysisStats.incomplete+analysisStats.failed+analysisStats.missing>0;
  const status=workerStarted?'running':completed===0&&failedSources>=tasks.length&&tasks.length>0?'failed':failedSources===0&&!markdownError&&!queuePending&&!analysisErrors?'completed':'partial';
- await db.from('radar_update_runs').update({status,total_sources:tasks.length,completed_sources:completed,failed_sources:failedSources,new_notices:newNotices,updated_notices:updatedNotices,incomplete_analyses:analysisStats.incomplete,consolidated_storage_path:storagePath,finished_at:status==='running'?null:new Date().toISOString(),summary:{scan_id:scanId,markdown_error:markdownError,analysis:analysisStats,analysis_worker_started:workerStarted,analysis_worker_unavailable:queuePending>0&&!workerStarted,worker_rejections:workerResults.filter(item=>item.status==='rejected').length}}).eq('id',runId);
+ await db.from('radar_update_runs').update({status,total_sources:tasks.length,completed_sources:completed,failed_sources:failedSources,new_notices:newNotices,updated_notices:updatedNotices,incomplete_analyses:analysisStats.incomplete,consolidated_storage_path:storagePath,finished_at:status==='running'?null:new Date().toISOString(),summary:{scan_id:scanId,markdown_error:markdownError,markdown_error_code:markdownErrorCode,analysis:analysisStats,analysis_worker_started:workerStarted,analysis_worker_unavailable:queuePending>0&&!workerStarted,worker_rejections:workerResults.filter(item=>item.status==='rejected').length}}).eq('id',runId);
 }

@@ -2,7 +2,7 @@ import type {SupabaseClient} from '@supabase/supabase-js';
 import {processRadarNoticeAnalysis} from './radar-document-analysis.ts';
 
 export type RadarAnalysisStats={total:number;complete:number;incomplete:number;failed:number;pending:number;running:number;missing:number};
-export type RadarAnalysisBatch={processed:number;complete:number;incomplete:number;failed:number;deferred:number;claimError:boolean};
+export type RadarAnalysisBatch={processed:number;complete:number;incomplete:number;failed:number;deferred:number;claimError:boolean;claimErrorCode:string|null};
 
 export async function currentRadarAnalysisStats(db:SupabaseClient):Promise<RadarAnalysisStats>{
  const notices:Record<string,unknown>[]=[];
@@ -20,10 +20,12 @@ export async function currentRadarAnalysisStats(db:SupabaseClient):Promise<Radar
 }
 
 export async function processRadarAnalysisBatch(db:SupabaseClient):Promise<RadarAnalysisBatch>{
- const configured=Number.parseInt(process.env.RADAR_ANALYSIS_BATCH_SIZE||'24',10),limit=Math.max(1,Math.min(100,Number.isFinite(configured)?configured:24));let reserved=0;
- const result:RadarAnalysisBatch={processed:0,complete:0,incomplete:0,failed:0,deferred:0,claimError:false};
- const worker=async()=>{while(true){if(reserved>=limit)return;reserved++;const {data,error}=await db.rpc('claim_radar_notice_analysis');if(error){result.claimError=true;return;}const job=data?.[0];if(!job)return;result.processed++;try{const status=await processRadarNoticeAnalysis(db,{id:job.id,version_id:job.version_id});if(status==='complete')result.complete++;else if(status==='incomplete')result.incomplete++;else if(status==='failed')result.failed++;else{result.deferred++;return;}}catch{result.failed++;await db.from('radar_notice_analyses').update({status:'failed',error_code:'analysis_worker_failed',lease_until:null,finished_at:new Date().toISOString()}).eq('id',job.id);}}};
- await Promise.all(Array.from({length:3},worker));return result;
+ // Keep each Vercel Hobby invocation below its 60-second limit. One bounded
+ // notice per worker per invocation; the next invocation continues the queue.
+ const configured=Number.parseInt(process.env.RADAR_ANALYSIS_BATCH_SIZE||'3',10),limit=Math.max(1,Math.min(3,Number.isFinite(configured)?configured:3));let reserved=0;
+ const result:RadarAnalysisBatch={processed:0,complete:0,incomplete:0,failed:0,deferred:0,claimError:false,claimErrorCode:null};
+ const worker=async()=>{while(true){if(reserved>=limit)return;reserved++;const {data,error}=await db.rpc('claim_radar_notice_analysis');if(error){result.claimError=true;result.claimErrorCode=String(error.code||'rpc_error').slice(0,40);return;}const job=data?.[0];if(!job)return;result.processed++;try{const status=await processRadarNoticeAnalysis(db,{id:job.id,version_id:job.version_id});if(status==='complete')result.complete++;else if(status==='incomplete')result.incomplete++;else if(status==='failed')result.failed++;else{result.deferred++;return;}}catch{result.failed++;await db.from('radar_notice_analyses').update({status:'failed',error_code:'analysis_worker_failed',lease_until:null,finished_at:new Date().toISOString()}).eq('id',job.id);}}};
+ await Promise.all(Array.from({length:limit},worker));return result;
 }
 
 export async function startRadarAnalysisWorker(runId:string|null,origin?:string):Promise<boolean>{
