@@ -1,5 +1,6 @@
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {createHash} from 'node:crypto';
+import {DOMMatrix,ImageData,Path2D} from '@napi-rs/canvas';
 import {load} from 'cheerio';
 import {FACTSHEET_MODEL,officialPdfUrl} from './candidate-factsheet.ts';
 
@@ -57,6 +58,8 @@ function partnershipQuoteSupports(value:boolean,quotes:string[]){
 function lunaCost(usage:Record<string,unknown>|undefined){const input=typeof usage?.prompt_tokens==='number'?usage.prompt_tokens:null,output=typeof usage?.completion_tokens==='number'?usage.completion_tokens:null,details=usage?.prompt_tokens_details&&typeof usage.prompt_tokens_details==='object'?usage.prompt_tokens_details as Record<string,unknown>:{},cached=typeof details.cached_tokens==='number'&&input!==null?Math.min(input,details.cached_tokens):0;return {input,output,cost:input!==null&&output!==null?((input-cached)*.1+cached*.01+output*.5)/1_000_000:null};}
 
 async function readPages(bytes:Uint8Array):Promise<{pages:PageText[];pageCount:number}>{
+ const globals=globalThis as unknown as Record<string,unknown>;
+ globals.DOMMatrix??=DOMMatrix;globals.ImageData??=ImageData;globals.Path2D??=Path2D;
  const pdfjs=await import('pdfjs-dist/legacy/build/pdf.mjs');
  const task=pdfjs.getDocument({data:bytes,isEvalSupported:false,useSystemFonts:true});
  const pdf=await task.promise;const pages:PageText[]=[];
