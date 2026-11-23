@@ -46,8 +46,17 @@ test('migrações, permissões e histórico preliminar funcionam em PostgreSQL l
   await db.exec(`insert into public.notifications(recipient,kind,status,idempotency_key,subject,body) values('a@example.org','source_issue','pending','k1','Alerta','Texto'); set role service_role;`);
   const claimedNotification=await db.query<{status:string;attempts:number}>(`select status,attempts from public.claim_notification()`);assert.deepEqual(claimedNotification.rows[0],{status:'sending',attempts:1});
   const noDuplicate=await db.query(`select id from public.claim_notification()`);assert.equal(noDuplicate.rows.length,0);await db.exec('reset role');
-  const schedule=await db.query<{winter:boolean;summer:boolean;wrong:boolean}>(`select public.weekly_scan_due('2026-01-05 08:30+00') winter,public.weekly_scan_due('2026-07-06 07:30+00') summer,public.weekly_scan_due('2026-07-06 08:30+00') wrong`);
-  assert.deepEqual(schedule.rows[0],{winter:true,summer:true,wrong:false});
+  const schedule=await db.query<{winter:boolean;summer:boolean;tuesday:boolean;weekend:boolean;wrong:boolean}>(`select public.weekly_scan_due('2026-01-05 08:30+00') winter,public.weekly_scan_due('2026-07-06 07:30+00') summer,public.weekly_scan_due('2026-11-24 08:30+00') tuesday,public.weekly_scan_due('2026-11-22 08:30+00') weekend,public.weekly_scan_due('2026-07-06 08:30+00') wrong`);
+  assert.deepEqual(schedule.rows[0],{winter:true,summer:true,tuesday:true,weekend:false,wrong:false});
+  const radarNotice=await db.query<{id:string;status:string}>(`insert into public.radar_notices(canonical_key,title,status) values('open-test','Aviso aberto','open'),('closed-test','Aviso fechado','closed') returning id,status`);
+  const analysisIds:{status:string;id:string}[]=[];
+  for(const row of radarNotice.rows){const version=await db.query<{id:string}>(`insert into public.radar_notice_versions(notice_id,content_hash,snapshot,status) values($1,$2,'{}'::jsonb,$3) returning id`,[row.id,`hash-${row.id}`,row.status]);const analysis=await db.query<{id:string}>(`insert into public.radar_notice_analyses(version_id,status,facts,source_references) values($1,'pending','{}'::jsonb,'[]'::jsonb) returning id`,[version.rows[0].id]);analysisIds.push({status:row.status,id:analysis.rows[0].id});}
+  await db.exec('set role service_role');
+  const claimedAnalysis=await db.query<{id:string}>(`select id from public.claim_radar_notice_analysis()`);
+  const openId=analysisIds.find(row=>row.status==='open')!.id,closedId=analysisIds.find(row=>row.status==='closed')!.id;
+  const claimStatus=await db.query<{open_status:string;closed_status:string}>(`select (select status from public.radar_notice_analyses where id=$1) open_status,(select status from public.radar_notice_analyses where id=$2) closed_status`,[openId,closedId]);
+  assert.equal(claimedAnalysis.rows.length,1);assert.equal(claimStatus.rows[0].open_status,'running');assert.equal(claimStatus.rows[0].closed_status,'pending');
+  await db.exec('reset role');
   const compete=await db.query<{active:boolean;connector_key:string}>(`select active,connector_key from public.sources where name='COMPETE 2030'`);assert.deepEqual(compete.rows[0],{active:true,connector_key:'compete_2030_v1'});
   const european=await db.query<{active:boolean;connector_key:string}>(`select active,connector_key from public.sources where name='Funding & Tenders Portal'`);assert.deepEqual(european.rows[0],{active:true,connector_key:'eu_grants_v1'});
   const prr=await db.query<{active:boolean;connector_key:string}>(`select active,connector_key from public.sources where name='PRR / Recuperar Portugal'`);assert.deepEqual(prr.rows[0],{active:true,connector_key:'prr_v1'});
