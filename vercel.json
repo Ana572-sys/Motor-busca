@@ -3,9 +3,8 @@
   "regions": ["dub1"],
   "schedules": {
     "weekly-radar-gi": {
-      "schedule": "30 8 * * 1",
+      "schedule": "30 8 * * 1-5",
       "timezone": "Europe/Lisbon",
-      "jitter": 15,
       "path": "/api/cron/weekly",
       "requestMethod": "GET"
     }

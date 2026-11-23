@@ -4,6 +4,7 @@ import type {SupabaseClient} from '@supabase/supabase-js';
 import {processScanSource} from '@/lib/scan-processor';
 import {dispatchPendingNotifications,graphConfigFromEnv,queueWeeklyDigest} from '@/lib/notifications';
 import {renderWeeklyReport,type WeeklyItem,type WeeklyReport} from '@/lib/weekly-email';
+import {finalizeRadarUpdateRun} from '@/lib/radar-update-run';
 
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
@@ -15,16 +16,22 @@ export async function GET(request:Request){
  const db=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}}),{data:scanId,error}=await db.rpc('enqueue_weekly_scan',{p_now:new Date().toISOString()});
  if(error)return Response.json({error:'weekly_scan_enqueue_failed'},{status:500});
  if(!scanId)return Response.json({status:'outside_lisbon_schedule_window'});
+ const {data:initialTasks}=await db.from('scan_sources').select('source_id,status').eq('scan_id',scanId);
+ const {data:run}=await db.from('radar_update_runs').insert({kind:'scheduled',status:'running',started_at:new Date().toISOString()}).select('id').single();
+ if(run&&initialTasks?.length)await db.from('radar_update_sources').insert(initialTasks.map(task=>({run_id:run.id,source_id:task.source_id,status:task.status==='na fila'?'queued':'failed',error_code:task.status==='na fila'?null:'connector_unavailable'})));
  after(async()=>{
-  await Promise.allSettled(Array.from({length:44},()=>processScanSource(db,scanId)));
+  const outcomes=await Promise.allSettled(Array.from({length:Math.max(initialTasks?.filter(task=>task.status==='na fila').length||0,1)},()=>processScanSource(db,scanId)));
+  if(run)await finalizeRadarUpdateRun(db,run.id,scanId,outcomes);
   const [{data:scan},{data:tasks}]=await Promise.all([
    db.from('scans').select('id,scheduled_for').eq('id',scanId).maybeSingle(),
    db.from('scan_sources').select('source_id,status').eq('scan_id',scanId),
   ]);
   if(!scan?.scheduled_for)return;
   try{
-   const report=await buildReport(db,scanId,scan.scheduled_for,tasks||[],request.url);
-   await queueWeeklyDigest(db,scanId,renderWeeklyReport(report,request.url));
+   if(new Date(`${scan.scheduled_for}T12:00:00.000Z`).getUTCDay()===1){
+    const report=await buildReport(db,scanId,scan.scheduled_for,tasks||[],request.url);
+    await queueWeeklyDigest(db,scanId,renderWeeklyReport(report,request.url));
+   }
    const graph=graphConfigFromEnv();if(graph)await dispatchPendingNotifications(db,graph);
   }catch(error){console.error('Não foi possível compor ou enviar o resumo semanal.',error instanceof Error?error.message:'weekly_digest_failed');}
  });

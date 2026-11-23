@@ -22,12 +22,13 @@ import {fetchEismea} from './eismea-listing.ts';
 import {fetchEureka,fetchEurostars} from './eureka-listing.ts';
 import {fetchClusterCalls} from './cluster-calls-listing.ts';
 import {fetchEui} from './eui-listing.ts';
+import {syncCandidatesToRadar} from './radar-catalog-sync.ts';
 
 /** Process one claimed source; a failure stays recorded instead of implying a complete search. */
 export async function processScanSource(db:SupabaseClient,scanId?:string,fetcher?:typeof fetch){
  const {data,error}=scanId?await db.rpc('claim_scan_source_for_scan',{p_scan:scanId}):await db.rpc('claim_scan_source');
  if(error)throw new Error('Não foi possível reservar uma fonte.');
- const task=data?.[0];if(!task)return {status:'sem tarefas' as const};
+ const task=data?.[0];if(!task)return {status:'sem tarefas' as const,sourceId:null};
  const {data:source,error:sourceError}=await db.from('sources').select('id,name,url,connector_key,active').eq('id',task.source_id).single();
  try{
   if(sourceError||!source||!source.active)throw new Error('Fonte desativada ou indisponível.');
@@ -90,7 +91,12 @@ export async function processScanSource(db:SupabaseClient,scanId?:string,fetcher
   if(uploadError)throw new Error('Não foi possível guardar a listagem.');
   const {error:finishError}=await db.rpc('finish_scan_source',{p_task:task.id,p_hash:hash,p_path:path,p_size:bytes.length,p_candidates:candidates});
   if(finishError)throw new Error('Não foi possível registar os candidatos.');
-  return {status:'concluída' as const,count:candidates.length};
+  try{
+   const catalog=await syncCandidatesToRadar(db,{id:source.id,name:source.name},candidates as Record<string,unknown>[]);
+   return {status:'concluída' as const,sourceId:source.id,count:candidates.length,catalog};
+  }catch{
+   return {status:'concluída' as const,sourceId:source.id,count:candidates.length,catalogSync:'erro' as const};
+  }
  }catch(error){
   const detail=error instanceof Error?error.message:'Erro de processamento.';
   const {error:saveError}=await db.rpc('fail_scan_source',{p_task:task.id,p_detail:detail});
