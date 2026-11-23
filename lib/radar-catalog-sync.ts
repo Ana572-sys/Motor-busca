@@ -58,7 +58,10 @@ export async function syncCandidatesToRadar(db:SupabaseClient,source:{id:string;
    if(queueError)throw new Error('radar_analysis_queue_write_failed');
    insertedAnalysis=true;
   }
-  if(status==='open'&&(insertedAnalysis||queuedAnalysis?.status==='pending')){
+  const {data:latestVersion,error:latestVersionError}=await db.from('radar_notice_versions').select('id').eq('notice_id',notice.id).order('detected_at',{ascending:false}).order('id',{ascending:false}).limit(1).maybeSingle();
+  if(latestVersionError)throw new Error('radar_latest_version_lookup_failed');
+  const isLatestVersion=latestVersion?.id===versionId;
+  if(status==='open'&&isLatestVersion&&(insertedAnalysis||queuedAnalysis?.status==='pending')){
    const {error:pendingError}=await db.from('radar_notices').update({analysis_status:'pending',eligible_regions:[],beneficiaries:[],eligible_sectors:[],eligible_caes:[],investment_minimum:null,investment_maximum:null,funding_rate:null,eligible_expenses:[],ineligible_expenses:[],spending_conditions:[],partnership_required:null,rd_requirement:'unidentified',short_summary:null,extraction_confidence:null,last_analyzed_at:null,updated_at:new Date().toISOString()}).eq('id',notice.id);
    if(pendingError)throw new Error('radar_notice_pending_status_failed');
   }

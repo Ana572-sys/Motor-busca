@@ -6,6 +6,7 @@ import {createClient} from '@supabase/supabase-js';
 import {configured,supabase} from '@/lib/supabase';
 import {processScanSource} from '@/lib/scan-processor';
 import {finalizeRadarUpdateRun} from '@/lib/radar-update-run';
+import {startRadarAnalysisWorker} from '@/lib/radar-analysis-queue';
 
 export async function requestRadarUpdate(){
  if(!configured())redirect('/login');
@@ -30,4 +31,14 @@ export async function requestRadarUpdate(){
   revalidatePath('/');
  });
  revalidatePath('/');redirect(`/?tab=radar&execucao=${executionId}`);
+}
+
+export async function resumeRadarAnalysisQueue(){
+ if(!configured())redirect('/login');
+ const db=await supabase();const {data:{user}}=await db.auth.getUser();if(!user)redirect('/login');
+ const {data:profile}=await db.from('users').select('id').eq('id',user.id).maybeSingle();if(!profile)redirect('/login?erro=acesso');
+ const {data:run}=await db.from('radar_update_runs').select('id').in('status',['running','partial']).order('started_at',{ascending:false}).limit(1).maybeSingle();
+ const started=await startRadarAnalysisWorker(run?.id||null);
+ if(!started)redirect(`/?tab=radar${run?.id?`&execucao=${run.id}`:''}&erro=fila`);
+ redirect(`/?tab=radar${run?.id?`&execucao=${run.id}`:''}`);
 }
