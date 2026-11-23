@@ -16,7 +16,20 @@ async function fetchFeed(origin:string,programId:string|null,state:'aberto'|'enc
  const pageSize=origin==='https://pessoas2030.gov.pt'?1:3;
  const fetchPage=async(page:number):Promise<unknown[]>=>{
   const form=new URLSearchParams({estadoAvisoId:state==='aberto'?'7':'8',page:String(page)});if(programId)form.set('programaId',programId);
-  const response=await fetcher(new URL('/wp-json/avisos/query',origin),{method:'POST',redirect:'error',signal:AbortSignal.timeout(15000),headers:{'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json','User-Agent':'Crowe-GI-Radar/0.1 (consulta de avisos)'},body:form});
+  let response:Response|undefined,lastError:unknown;
+  for(let attempt=0;attempt<2;attempt++){
+   try{
+    response=await fetcher(new URL('/wp-json/avisos/query',origin),{method:'POST',redirect:'error',signal:AbortSignal.timeout(15000),headers:{'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json','User-Agent':'Crowe-GI-Radar/0.1 (consulta de avisos)'},body:form});
+    if(response.status<500&&response.status!==429)break;
+    lastError=new Error(`HTTP ${response.status}`);
+   }catch(error){lastError=error;}
+   if(attempt===1||Date.now()+500>=deadline){
+    const detail=lastError instanceof Error?lastError.message:'erro de ligação';
+    throw new Error(`A fonte não respondeu após duas tentativas: ${detail}`);
+   }
+   await new Promise(resolve=>setTimeout(resolve,500));
+  }
+  if(!response)throw new Error('A fonte não respondeu após duas tentativas.');
   if(!response.ok)throw new Error(`A fonte devolveu HTTP ${response.status}.`);
   if(Number(response.headers.get('content-length'))>2_000_000||!response.body)throw new Error('A resposta da fonte é demasiado grande ou está vazia.');
   const reader=response.body.getReader(),chunks:Uint8Array[]=[];let length=0;

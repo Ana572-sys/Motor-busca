@@ -54,7 +54,7 @@ export async function processScanSource(db:SupabaseClient,scanId?:string,fetcher
    candidates=(await fetchEurostars(fetcher)).map(x=>({...x,contentHash:createHash('sha256').update(JSON.stringify(x)).digest('hex')}));
   }else if(source.connector_key==='cluster_calls_v1'&&source.url==='https://www.clustercollaboration.eu/funding-and-tenders'){
    candidates=(await fetchClusterCalls(fetcher)).map(x=>({...x,contentHash:createHash('sha256').update(JSON.stringify(x)).digest('hex')}));
-  }else if(source.connector_key==='eui_calls_v1'&&source.url==='https://www.urban-initiative.eu/calls-proposals'){
+  }else if(source.connector_key==='eui_calls_v1'&&source.url?.replace(/\/+$/,'')==='https://www.urban-initiative.eu'){
    candidates=(await fetchEui(fetcher)).map(x=>({...x,contentHash:createHash('sha256').update(JSON.stringify(x)).digest('hex')}));
   }else if(source.connector_key==='prr_v1'&&source.url==='https://recuperarportugal.gov.pt/candidaturas-prr/'){
    candidates=(await fetchPrr(fetcher)).map(x=>({...x,contentHash:createHash('sha256').update(JSON.stringify(x)).digest('hex')}));
