@@ -1,20 +1,47 @@
 import {load} from 'cheerio';
 
-export type PepacCandidate={externalId:string;code:string;title:string;startsAt:string|null;endsAt:string|null;documentUrl:string;sourceState:'aberto'|'encerrado'|'por validar';documents:never[];programs:string[]};
+export type PepacCandidate={externalId:string;code:string;title:string;startsAt:string|null;endsAt:string|null;documentUrl:string;sourceState:'aberto';documents:never[];programs:string[]};
 const obj=(x:unknown):Record<string,unknown>=>x&&typeof x==='object'&&!Array.isArray(x)?x as Record<string,unknown>:{};
 const months:Record<string,string>={janeiro:'01',fevereiro:'02',março:'03',marco:'03',abril:'04',maio:'05',junho:'06',julho:'07',agosto:'08',setembro:'09',outubro:'10',novembro:'11',dezembro:'12'};
-function iso(day:string,month:string,year:string){const value=`${year}-${months[month.toLowerCase().replace(/ç/g,'c')]||months[month.toLowerCase()]}-${day.padStart(2,'0')}`,date=new Date(`${value}T00:00:00Z`);return Number.isFinite(date.valueOf())&&date.toISOString().slice(0,10)===value?value:null;}
-function detailFacts(html:string,url:string){
- const page=new URL(url);if(page.origin!=='https://pepacc.pt'||!/^\/concursos(?:-externos)?\//.test(page.pathname)||page.search||page.hash)throw new Error('Endereço de concurso PEPAC inesperado.');
- const $=load(html),title=$('h1').first().text().replace(/\s+/g,' ').trim(),body=$('body').text().replace(/\s+/g,' ').trim();if(!title||!body||!/PEPAC no Continente/i.test($('title').text()))throw new Error('Página de detalhe PEPAC incompleta.');
- const deadlineMatch=body.match(/Data\s+Limite\s*:\s*(\d{1,2})[-/](\d{1,2})[-/](20\d{2})/i);let endsAt:string|null=null;if(deadlineMatch){const value=`${deadlineMatch[3]}-${deadlineMatch[2].padStart(2,'0')}-${deadlineMatch[1].padStart(2,'0')}`,parsed=new Date(`${value}T00:00:00Z`);if(!Number.isFinite(parsed.valueOf())||parsed.toISOString().slice(0,10)!==value)throw new Error('Prazo PEPAC inválido.');endsAt=value;}
- const period=body.match(/(?:candidaturas\s+abertas\s+de|de)\s+(\d{1,2})\s+de\s+([a-zç]+)\s+a\s+(\d{1,2})\s+de\s+([a-zç]+)\s+de\s+(20\d{2})/i);let startsAt:string|null=null,periodEnd:string|null=null;if(period){startsAt=iso(period[1],period[2],period[5]);periodEnd=iso(period[3],period[4],period[5]);}
- const end=endsAt||periodEnd,today=new Date().toLocaleDateString('en-CA',{timeZone:'Europe/Lisbon'}),explicitOpen=/concurso\s+a\s+decorrer|candidaturas\s+abertas/i.test(body),explicitClosed=/concurso\s+encerrado|candidaturas\s+encerradas/i.test(body);
- const sourceState:PepacCandidate['sourceState']=explicitClosed?'encerrado':end&&end<today?(explicitOpen?'por validar':'encerrado'):explicitOpen?'aberto':'por validar';
- return {title,startsAt,endsAt:end,sourceState};
+function iso(day:string,month:string,year:string){const value=`${year}-${months[month.toLowerCase()]||months[month.toLowerCase().replace(/ç/g,'c')]}-${day.padStart(2,'0')}`,date=new Date(`${value}T00:00:00Z`);return Number.isFinite(date.valueOf())&&date.toISOString().slice(0,10)===value?value:null;}
+function textValue(value:unknown){if(typeof value==='string')return value;if(value&&typeof value==='object'&&!Array.isArray(value)){const x=obj(value);return typeof x.rendered==='string'?x.rendered:'';}return '';}
+function candidateIdentity(id:unknown,link:string,type:'competition'|'external_competition'){
+ const raw=String(id??'').trim();if(raw&&/^[a-zA-Z0-9_-]{1,100}$/.test(raw))return raw;
+ const slug=new URL(link).pathname.split('/').filter(Boolean).at(-1)||'';if(!/^[a-z0-9-]{1,100}$/i.test(slug))throw new Error('Identificador de concurso PEPAC inválido.');return `${type}-${slug}`;
 }
-export function parsePepacItem(raw:unknown,type:'competition'|'external_competition'):PepacCandidate{const x=obj(raw),id=String(x.id??''),title=obj(x.title).rendered,link=x.link;if(!/^\d+$/.test(id)||typeof title!=='string'||!title.trim()||typeof link!=='string')throw new Error('Concurso PEPAC incompleto.');const u=new URL(link),prefix=type==='competition'?'/concursos/':'/concursos-externos/';if(u.origin!=='https://pepacc.pt'||!u.pathname.startsWith(prefix)||u.pathname===prefix||u.search||u.hash)throw new Error('Endereço PEPAC inesperado.');return {externalId:`${type}-${id}`,code:`PEPAC-${id}`,title:load(`<div>${title}</div>`)('div').text().trim(),startsAt:null,endsAt:null,documentUrl:u.toString(),sourceState:'por validar',documents:[],programs:['PEPAC Continente']};}
-async function responseText(fetcher:typeof fetch,url:string){const r=await fetcher(url,{redirect:'error',signal:AbortSignal.timeout(12000)});if(!r.ok||!r.body||Number(r.headers.get('content-length'))>2_000_000)throw new Error('Página PEPAC indisponível ou demasiado grande.');const reader=r.body.getReader(),chunks:Uint8Array[]=[];let size=0;try{while(true){const part=await reader.read();if(part.done)break;size+=part.value.length;if(size>2_000_000){await reader.cancel();throw new Error('Página PEPAC demasiado grande.');}chunks.push(part.value);}}finally{reader.releaseLock();}const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}return new TextDecoder().decode(bytes);}
-async function enrich(candidate:PepacCandidate,fetcher:typeof fetch){try{return {...candidate,...detailFacts(await responseText(fetcher,candidate.documentUrl),candidate.documentUrl)};}catch{return candidate;}}
-async function mapBounded<T,R>(items:T[],limit:number,fn:(item:T)=>Promise<R>):Promise<R[]>{const output=new Array<R>(items.length);let cursor=0;async function worker(){while(true){const index=cursor++;if(index>=items.length)return;output[index]=await fn(items[index]);}}await Promise.all(Array.from({length:Math.min(limit,items.length)},()=>worker()));return output;}
-export async function fetchPepac(fetcher:typeof fetch=fetch):Promise<PepacCandidate[]>{const all:PepacCandidate[]=[],seen=new Set<string>();for(const type of ['competition','external_competition'] as const){let total:number|null=null;for(let page=1;page<=20;page++){const u=new URL(`https://pepacc.pt/wp-json/wp/v2/${type}`);u.searchParams.set('per_page','100');u.searchParams.set('page',String(page));u.searchParams.set('_fields','id,title,link');const r=await fetcher(u,{redirect:'error',signal:AbortSignal.timeout(15000)});if(!r.ok||!r.body||Number(r.headers.get('content-length'))>2_000_000)throw new Error('Listagem PEPAC indisponível.');const n=Number(r.headers.get('x-wp-total')),pages=Number(r.headers.get('x-wp-totalpages'));if(!Number.isInteger(n)||n<0||n>2000||!Number.isInteger(pages)||pages<0||pages>20||(total!==null&&total!==n))throw new Error('Paginação PEPAC inesperada.');total=n;const reader=r.body.getReader(),chunks:Uint8Array[]=[];let size=0;try{while(true){const c=await reader.read();if(c.done)break;size+=c.value.length;if(size>2_000_000){await reader.cancel();throw new Error('Resposta PEPAC demasiado grande.');}chunks.push(c.value);}}finally{reader.releaseLock();}const bytes=new Uint8Array(size);let off=0;for(const c of chunks){bytes.set(c,off);off+=c.length;}let data:unknown;try{data=JSON.parse(new TextDecoder().decode(bytes));}catch{throw new Error('Resposta PEPAC inválida.');}if(!Array.isArray(data))throw new Error('Resposta PEPAC inesperada.');for(const raw of data){const x=parsePepacItem(raw,type);if(seen.has(x.externalId))throw new Error('Concurso PEPAC repetido.');seen.add(x.externalId);all.push(x);}if(page>=pages){if([...seen].filter(k=>k.startsWith(`${type}-`)).length!==total)throw new Error('Listagem PEPAC incompleta.');break;}if(page===20)throw new Error('Listagem PEPAC excedeu o limite de páginas.');}}return mapBounded(all,8,candidate=>enrich(candidate,fetcher));}
+function datesFromExcerpt(value:string,finalDate:unknown){
+ const match=value.match(/(?:candidaturas\s+abertas\s+)?de\s+(\d{1,2})\s+de\s+([a-zç]+)(?:\s+de\s+(20\d{2}))?\s+a\s+(\d{1,2})\s+de\s+([a-zç]+)\s+de\s+(20\d{2})/i);
+ const startYear=match?.[3]||match?.[6],startsAt=match&&startYear?iso(match[1],match[2],startYear):null;
+ let endsAt=match?iso(match[4],match[5],match[6]):null;
+ if(typeof finalDate==='string'){const finalMatch=finalDate.match(/^(\d{1,2})-(\d{1,2})-(20\d{2})(?:\s+\d{1,2}:\d{2})?$/);if(finalMatch){const candidate=`${finalMatch[3]}-${finalMatch[2]}-${finalMatch[1]}`,date=new Date(`${candidate}T00:00:00Z`);if(Number.isFinite(date.valueOf())&&date.toISOString().slice(0,10)===candidate)endsAt=candidate;}}
+ return {startsAt,endsAt};
+}
+export function parsePepacItem(raw:unknown,type:'competition'|'external_competition'='competition'):PepacCandidate{
+ const x=obj(raw),title=load(`<div>${textValue(x.title)}</div>`)('div').text().replace(/\s+/g,' ').trim(),link=x.link;
+ if(!title||typeof link!=='string')throw new Error('Concurso PEPAC incompleto.');
+ const u=new URL(link),prefix=type==='competition'?'/concursos/':'/concursos-externos/';if(u.origin!=='https://pepacc.pt'||!u.pathname.startsWith(prefix)||u.pathname===prefix||u.search||u.hash)throw new Error('Endereço PEPAC inesperado.');
+ const id=candidateIdentity(x.id??x.ID,link,type),dates=datesFromExcerpt(textValue(x.excerpt),x.final_date);
+ return {externalId:`${type}-${id}`,code:`PEPAC-${id}`,title,startsAt:dates.startsAt,endsAt:dates.endsAt,documentUrl:u.toString(),sourceState:'aberto',documents:[],programs:['PEPAC Continente']};
+}
+async function readJson(fetcher:typeof fetch,url:URL,page:number):Promise<unknown>{
+ const r=await fetcher(url,{method:'POST',headers:{'content-type':'application/json'},redirect:'error',signal:AbortSignal.timeout(15000)});
+ if(!r.ok||!r.body||Number(r.headers.get('content-length'))>2_000_000)throw new Error('Listagem oficial PEPAC indisponível.');
+ const reader=r.body.getReader(),chunks:Uint8Array[]=[];let size=0;try{while(true){const part=await reader.read();if(part.done)break;size+=part.value.length;if(size>2_000_000){await reader.cancel();throw new Error('Resposta oficial PEPAC demasiado grande.');}chunks.push(part.value);}}finally{reader.releaseLock();}
+ const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
+ let payload:unknown;try{payload=JSON.parse(new TextDecoder().decode(bytes));}catch{throw new Error('Resposta oficial PEPAC inválida.');}
+ const result=obj(payload),rows=result.data,totalPages=Number(result.pages),currentPage=Number(result.page),total=Number(result.total),perPage=Number(result.per_page);
+ if(!Array.isArray(rows)||rows.length>5||!Number.isInteger(total)||total<0||!Number.isInteger(perPage)||perPage!==5||!Number.isInteger(totalPages)||totalPages!==Math.ceil(total/perPage)||totalPages>20||!Number.isInteger(currentPage)||currentPage!==page||((totalPages===0)!==(rows.length===0)))throw new Error('Paginação oficial PEPAC inesperada.');
+ return payload;
+}
+/** Uses the official page's own "current" endpoint: avoids crawling hundreds of archived WordPress posts. */
+export async function fetchPepac(fetcher:typeof fetch=fetch):Promise<PepacCandidate[]> {
+ const all:PepacCandidate[]=[],seen=new Set<string>();let pages:number|undefined;
+ for(let page=1;page<=20;page++){
+  const url=new URL('https://pepacc.pt/wp-json/pepac/v1/competitions');url.searchParams.set('page',String(page));url.searchParams.set('per_page','5');url.searchParams.set('status','current');
+  const payload=obj(await readJson(fetcher,url,page)),rows=payload.data as unknown[],totalPages=Number(payload.pages);
+  if(pages!==undefined&&pages!==totalPages)throw new Error('Paginação oficial PEPAC alterada durante a consulta.');pages=totalPages;
+  for(const raw of rows){const candidate=parsePepacItem(raw);if(seen.has(candidate.externalId))throw new Error('Concurso PEPAC repetido.');seen.add(candidate.externalId);all.push(candidate);}
+  if(page>=totalPages)return all;
+ }
+ throw new Error('Listagem oficial PEPAC excedeu o limite de páginas.');
+}
