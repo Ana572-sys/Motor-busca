@@ -11,10 +11,10 @@ const safeUrl=(value:unknown)=>{if(typeof value!=='string')return null;try{const
 const isPdf=(value:string)=>{try{const url=new URL(value);return url.pathname.toLowerCase().endsWith('.pdf')||[url.searchParams.get('filename'),url.searchParams.get('file')].some(name=>name?.toLowerCase().endsWith('.pdf'));}catch{return false;}};
 const stable=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const chunks=<T,>(items:T[],size:number)=>Array.from({length:Math.ceil(items.length/size)},(_,index)=>items.slice(index*size,(index+1)*size));
-function sourceNoticeState(value:string|undefined,deadline:string|null,today:string):NoticeState{
- if(deadline&&deadline<today)return 'closed';
+export function sourceNoticeState(value:string|undefined,deadline:string|null,today:string):NoticeState{
  if(value&&/(fech|encerr|clos)/i.test(value))return 'closed';
  if(value&&/(abert|open)/i.test(value))return 'open';
+ if(deadline&&deadline<today)return 'closed';
  return 'unconfirmed';
 }
 
@@ -29,7 +29,7 @@ export async function syncCandidatesToRadar(db:SupabaseClient,source:{id:string;
   const program=Array.isArray(programValue)?programValue.map(x=>typeof x==='string'?x:'').filter(Boolean).join(' · ')||null:text(programValue)??null;
   const deadline=date(item.endsAt??item.closing_date??item.deadline),opening=date(item.startsAt??item.opening_date);
   const sourceState=text(item.sourceState,item.source_state,item.status)?.toLowerCase();
-  const status=/suspens[aã]o de candidaturas/i.test(code||'')?'unconfirmed':sourceNoticeState(sourceState,deadline,today);
+  const status=/suspens[aã]o/i.test(code||'')?'unconfirmed':sourceNoticeState(sourceState,deadline,today);
   const officialUrl=safeUrl(item.officialUrl??item.official_url??item.url??item.documentUrl??item.document_url),documentUrl=safeUrl(item.documentUrl??item.document_url);
   const observedRegion=text(item.region,item.eligibleRegion,item.eligible_region);
   const regions=observedRegion&&!/^(informação não identificada|não identificável)/i.test(observedRegion.trim())?[observedRegion]:[];
@@ -57,7 +57,10 @@ export async function syncCandidatesToRadar(db:SupabaseClient,source:{id:string;
    const now=new Date().toISOString();return {id:existing?.id,canonical_key:row.canonicalKey,official_code:row.code,title:row.title,program:row.program??existing?.program??null,status:row.status,analysis_status:existing?.analysis_status??'pending',opening_date:row.opening??existing?.opening_date??null,deadline:row.deadline??existing?.deadline??null,eligible_regions:existing?.eligible_regions??[],beneficiaries:existing?.beneficiaries??[],eligible_sectors:existing?.eligible_sectors??[],eligible_caes:existing?.eligible_caes??[],investment_minimum:existing?.investment_minimum??null,investment_maximum:existing?.investment_maximum??null,funding_rate:existing?.funding_rate??null,eligible_expenses:existing?.eligible_expenses??[],ineligible_expenses:existing?.ineligible_expenses??[],spending_conditions:existing?.spending_conditions??[],partnership_required:existing?.partnership_required??null,rd_requirement:existing?.rd_requirement??'unidentified',short_summary:existing?.short_summary??null,official_url:row.officialUrl??existing?.official_url??null,extraction_confidence:existing?.extraction_confidence??null,first_seen_at:existing?.first_seen_at??now,last_seen_at:now,last_analyzed_at:existing?.last_analyzed_at??null,updated_at:now};
   });
   const {data:written,error:noticeError}=await db.from('radar_notices').upsert(notices,{onConflict:'canonical_key'}).select('id,canonical_key');
-  if(noticeError||!written)throw new Error('radar_catalog_write_failed');
+  if(noticeError||!written){
+   const detail=noticeError?[noticeError.code,noticeError.message,noticeError.details,noticeError.hint].filter((part)=>typeof part==='string'&&part.trim()).join(' | '):'Resposta de gravação vazia.';
+   throw new Error(`radar_catalog_write_failed: ${detail.slice(0,240)}`);
+  }
   const noticeIdByKey=new Map(written.map((row:any)=>[row.canonical_key,row.id]));
   const externalIds=group.flatMap(row=>row.observations.map(observation=>observation.externalId)).filter((value):value is string=>Boolean(value));
   const {data:candidateRows,error:candidateError}=externalIds.length?await db.from('source_candidates').select('id,external_id').eq('source_id',source.id).in('external_id',externalIds):{data:[],error:null};
@@ -71,7 +74,7 @@ export async function syncCandidatesToRadar(db:SupabaseClient,source:{id:string;
   if(linkedStateError)throw new Error('radar_catalog_state_lookup_failed');
   const resolvedStates=new Map<string,NoticeState>();
   const suspendedNoticeIds=new Set<string>();
-  for(const link of linkedStates||[]){if(/suspens[aã]o de candidaturas/i.test(link.source_code||''))suspendedNoticeIds.add(link.notice_id);const current=resolvedStates.get(link.notice_id);if(link.observed_status==='open')resolvedStates.set(link.notice_id,'open');else if(!current)resolvedStates.set(link.notice_id,link.observed_status as NoticeState);else if(current!=='open'&&link.observed_status!=='closed')resolvedStates.set(link.notice_id,'unconfirmed');}
+  for(const link of linkedStates||[]){if(/suspens[aã]o/i.test(link.source_code||''))suspendedNoticeIds.add(link.notice_id);const current=resolvedStates.get(link.notice_id);if(link.observed_status==='open')resolvedStates.set(link.notice_id,'open');else if(!current)resolvedStates.set(link.notice_id,link.observed_status as NoticeState);else if(current!=='open'&&link.observed_status!=='closed')resolvedStates.set(link.notice_id,'unconfirmed');}
   const statusIds=new Map<NoticeState,string[]>([['open',[]],['closed',[]],['unconfirmed',[]]]);
   for(const notice of group){const noticeId=noticeIdByKey.get(notice.canonicalKey);if(!noticeId)continue;const resolved=resolvedStates.get(noticeId)||notice.status;const deadlineExpired=Boolean(notice.deadline&&notice.deadline<today);const status:NoticeState=suspendedNoticeIds.has(noticeId)?'unconfirmed':deadlineExpired?'closed':resolved;statusIds.get(status)!.push(noticeId);notice.status=status;}
   for(const [status,ids] of statusIds){if(!ids.length)continue;const {error}=await db.from('radar_notices').update({status,...(status==='closed'?{closed_detected_at:now}:{}),updated_at:now}).in('id',ids);if(error)throw new Error('radar_catalog_state_write_failed');}
