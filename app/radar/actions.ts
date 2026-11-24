@@ -1,11 +1,9 @@
 'use server';
-import {after} from 'next/server';
 import {redirect} from 'next/navigation';
 import {revalidatePath} from 'next/cache';
 import {createClient} from '@supabase/supabase-js';
 import {configured,supabase} from '@/lib/supabase';
 import {startRadarAnalysisWorker} from '@/lib/radar-analysis-queue';
-import {startRadarSourceWorker} from '@/lib/radar-source-queue';
 
 async function runRadarUpdate(analysisDeferred:boolean){
  if(!configured())redirect('/login');
@@ -14,7 +12,7 @@ async function runRadarUpdate(analysisDeferred:boolean){
  const url=process.env.NEXT_PUBLIC_SUPABASE_URL,key=process.env.SUPABASE_SECRET_KEY;if(!url||!key)redirect('/?tab=radar&erro=configuracao');
  const {data:scanId,error:scanError}=await db.rpc('request_manual_scan',{p_period:'última semana'});if(scanError||!scanId)redirect('/?tab=radar&erro=atualizacao');
  const admin=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
- const {data:run,error:runError}=await admin.from('radar_update_runs').insert({kind:'manual',status:'running',requested_by:user.id,started_at:new Date().toISOString(),summary:analysisDeferred?{analysis_deferred:true}:undefined}).select('id').single();
+ const {data:run,error:runError}=await admin.from('radar_update_runs').insert({kind:'manual',status:'running',requested_by:user.id,started_at:new Date().toISOString(),summary:{analysis_deferred:analysisDeferred,scan_id:scanId}}).select('id').single();
  if(runError||!run){await admin.from('scans').update({status:'erro',finished_at:new Date().toISOString()}).eq('id',scanId);redirect('/?tab=radar&erro=atualizacao');}
  const {data:tasks}=await admin.from('scan_sources').select('source_id,status').eq('scan_id',scanId);
  const taskRows=tasks||[];
@@ -25,11 +23,6 @@ async function runRadarUpdate(analysisDeferred:boolean){
   await admin.from('radar_update_runs').update({total_sources:taskRows.length,failed_sources:taskRows.filter(task=>task.status!=='na fila').length}).eq('id',run.id);
  }
  const executionId=run.id as string;
- after(async()=>{
-  const started=await startRadarSourceWorker(executionId,scanId,analysisDeferred);
-  if(!started){const detail='Não foi possível iniciar o processador de fontes da Vercel.';await admin.from('radar_update_sources').update({status:'failed',error_code:'source_worker_unavailable',error_detail:detail,finished_at:new Date().toISOString()}).eq('run_id',executionId).in('status',['queued','running']);await admin.from('radar_update_runs').update({status:'failed',failed_sources:taskRows.length,finished_at:new Date().toISOString(),summary:{analysis_deferred:analysisDeferred,source_worker_error:'worker_unavailable'}}).eq('id',executionId);}
-  revalidatePath('/');
- });
  revalidatePath('/');redirect(`/?tab=radar&execucao=${executionId}`);
 }
 
