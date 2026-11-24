@@ -27,3 +27,22 @@ export async function finalizeRadarUpdateRun(db:SupabaseClient,runId:string,scan
  const status=workerStarted?'running':completed===0&&failedSources>=tasks.length&&tasks.length>0?'failed':failedSources===0&&!markdownError&&!queuePending&&!analysisErrors?'completed':'partial';
  await db.from('radar_update_runs').update({status,total_sources:tasks.length,completed_sources:completed,failed_sources:failedSources,new_notices:newNotices,updated_notices:updatedNotices,incomplete_analyses:analysisStats.incomplete,consolidated_storage_path:storagePath,finished_at:status==='running'?null:new Date().toISOString(),summary:{scan_id:scanId,markdown_error:markdownError,markdown_error_code:markdownErrorCode,analysis:analysisStats,analysis_deferred:analysisDeferred,analysis_worker_started:workerStarted,analysis_worker_unavailable:queuePending>0&&!workerStarted&&!analysisDeferred,worker_rejections:workerResults.filter(item=>item.status==='rejected').length}}).eq('id',runId);
 }
+
+/** Finalize a source-worker run from its durable per-source ledger. */
+export async function finalizeRadarSourceRun(db:SupabaseClient,runId:string,scanId:string,analysisDeferred=false){
+ const {data:tasks,error:taskError}=await db.from('scan_sources').select('source_id,status,detail').eq('scan_id',scanId);
+ if(taskError||!tasks){await db.from('radar_update_runs').update({status:'failed',failed_sources:1,finished_at:new Date().toISOString(),summary:{error:'scan_tasks_unavailable'}}).eq('id',runId);return;}
+ const {data:ledger,error:ledgerError}=await db.from('radar_update_sources').select('status,new_count,updated_count,error_code,error_detail').eq('run_id',runId);
+ if(ledgerError||!ledger){await db.from('radar_update_runs').update({status:'failed',failed_sources:1,finished_at:new Date().toISOString(),summary:{error:'source_ledger_unavailable'}}).eq('id',runId);return;}
+ const completed=ledger.filter(row=>row.status==='completed').length,failed=ledger.filter(row=>row.status==='failed').length;
+ const newNotices=ledger.reduce((total,row)=>total+Number(row.new_count||0),0),updatedNotices=ledger.reduce((total,row)=>total+Number(row.updated_count||0),0);
+ let markdown={storagePath:null as string|null,markdownError:false,markdownErrorCode:null as string|null};
+ try{markdown=await refreshOpenNoticesMarkdown(db);}catch{markdown.markdownError=true;markdown.markdownErrorCode='markdown_refresh_failed';}
+ let analysisStats={total:0,complete:0,incomplete:0,failed:0,pending:0,running:0,missing:0};
+ if(!analysisDeferred){try{analysisStats=await currentRadarAnalysisStats(db);}catch{analysisStats={...analysisStats,missing:1};}}
+ const queuePending=analysisStats.pending+analysisStats.running;
+ const workerStarted=Boolean(!analysisDeferred&&process.env.OPENAI_API_KEY&&queuePending&&await startRadarAnalysisWorker(runId));
+ const analysisErrors=!analysisDeferred&&(analysisStats.incomplete+analysisStats.failed+analysisStats.missing>0);
+ const status=workerStarted?'running':completed===0&&failed>=tasks.length&&tasks.length>0?'failed':failed===0&&!markdown.markdownError&&!queuePending&&!analysisErrors?'completed':'partial';
+ await db.from('radar_update_runs').update({status,total_sources:tasks.length,completed_sources:completed,failed_sources:failed,new_notices:newNotices,updated_notices:updatedNotices,incomplete_analyses:analysisStats.incomplete,consolidated_storage_path:markdown.storagePath,finished_at:status==='running'?null:new Date().toISOString(),summary:{scan_id:scanId,markdown_error:markdown.markdownError,markdown_error_code:markdown.markdownErrorCode,analysis:analysisDeferred?undefined:analysisStats,analysis_deferred:analysisDeferred,analysis_worker_started:workerStarted,analysis_worker_unavailable:queuePending>0&&!workerStarted&&!analysisDeferred,source_errors:ledger.filter(row=>row.status==='failed').map(row=>({error_code:row.error_code,error_detail:row.error_detail}))}}).eq('id',runId);
+}

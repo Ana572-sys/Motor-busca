@@ -4,9 +4,8 @@ import {redirect} from 'next/navigation';
 import {revalidatePath} from 'next/cache';
 import {createClient} from '@supabase/supabase-js';
 import {configured,supabase} from '@/lib/supabase';
-import {processScanSource} from '@/lib/scan-processor';
-import {finalizeRadarUpdateRun} from '@/lib/radar-update-run';
 import {startRadarAnalysisWorker} from '@/lib/radar-analysis-queue';
+import {startRadarSourceWorker} from '@/lib/radar-source-queue';
 
 async function runRadarUpdate(analysisDeferred:boolean){
  if(!configured())redirect('/login');
@@ -23,11 +22,12 @@ async function runRadarUpdate(analysisDeferred:boolean){
  if(taskRows.length){
   const {error:sourceInsertError}=await admin.from('radar_update_sources').insert(taskRows.map(task=>({run_id:run.id,source_id:task.source_id,status:task.status==='na fila'?'queued':'failed',error_code:task.status==='na fila'?null:'connector_unavailable'})));
   if(sourceInsertError){await admin.from('radar_update_runs').update({status:'failed',failed_sources:taskRows.length,finished_at:new Date().toISOString(),summary:{error:'source_run_records_failed'}}).eq('id',run.id);redirect(`/?tab=radar&execucao=${run.id}&erro=registo`);}
+  await admin.from('radar_update_runs').update({total_sources:taskRows.length,failed_sources:taskRows.filter(task=>task.status!=='na fila').length}).eq('id',run.id);
  }
  const executionId=run.id as string;
  after(async()=>{
-  const outcomes=await Promise.allSettled(Array.from({length:Math.max(taskRows.filter(task=>task.status==='na fila').length,1)},()=>processScanSource(admin,scanId)));
-  await finalizeRadarUpdateRun(admin,executionId,scanId,outcomes,analysisDeferred);
+  const started=await startRadarSourceWorker(executionId,scanId,analysisDeferred);
+  if(!started){const detail='Não foi possível iniciar o processador de fontes da Vercel.';await admin.from('radar_update_sources').update({status:'failed',error_code:'source_worker_unavailable',error_detail:detail,finished_at:new Date().toISOString()}).eq('run_id',executionId).in('status',['queued','running']);await admin.from('radar_update_runs').update({status:'failed',failed_sources:taskRows.length,finished_at:new Date().toISOString(),summary:{analysis_deferred:analysisDeferred,source_worker_error:'worker_unavailable'}}).eq('id',executionId);}
   revalidatePath('/');
  });
  revalidatePath('/');redirect(`/?tab=radar&execucao=${executionId}`);
