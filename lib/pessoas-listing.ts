@@ -17,17 +17,17 @@ async function fetchFeed(origin:string,programId:string|null,state:'aberto'|'enc
  const fetchPage=async(page:number):Promise<unknown[]>=>{
   const form=new URLSearchParams({estadoAvisoId:state==='aberto'?'7':'8',page:String(page)});if(programId)form.set('programaId',programId);
   let response:Response|undefined,lastError:unknown;
-  for(let attempt=0;attempt<2;attempt++){
+  for(let attempt=0;attempt<3;attempt++){
    try{
     response=await fetcher(new URL('/wp-json/avisos/query',origin),{method:'POST',redirect:'error',signal:AbortSignal.timeout(15000),headers:{'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json','User-Agent':'Crowe-GI-Radar/0.1 (consulta de avisos)'},body:form});
     if(response.status<500&&response.status!==429)break;
     lastError=new Error(`HTTP ${response.status}`);
    }catch(error){lastError=error;}
-   if(attempt===1||Date.now()+500>=deadline){
+   if(attempt===2||Date.now()+500*(attempt+1)>=deadline){
     const detail=lastError instanceof Error?lastError.message:'erro de ligação';
-    throw new Error(`A fonte não respondeu após duas tentativas: ${detail}`);
+    throw new Error(`A fonte não respondeu após três tentativas: ${detail}`);
    }
-   await new Promise(resolve=>setTimeout(resolve,500));
+   await new Promise(resolve=>setTimeout(resolve,500*(attempt+1)));
   }
   if(!response)throw new Error('A fonte não respondeu após duas tentativas.');
   if(!response.ok)throw new Error(`A fonte devolveu HTTP ${response.status}.`);

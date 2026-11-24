@@ -8,14 +8,14 @@ import {processScanSource} from '@/lib/scan-processor';
 import {finalizeRadarUpdateRun} from '@/lib/radar-update-run';
 import {startRadarAnalysisWorker} from '@/lib/radar-analysis-queue';
 
-export async function requestRadarUpdate(){
+async function runRadarUpdate(analysisDeferred:boolean){
  if(!configured())redirect('/login');
  const db=await supabase();const {data:{user}}=await db.auth.getUser();if(!user)redirect('/login');
  const {data:profile}=await db.from('users').select('id').eq('id',user.id).maybeSingle();if(!profile)redirect('/login?erro=acesso');
  const url=process.env.NEXT_PUBLIC_SUPABASE_URL,key=process.env.SUPABASE_SECRET_KEY;if(!url||!key)redirect('/?tab=radar&erro=configuracao');
  const {data:scanId,error:scanError}=await db.rpc('request_manual_scan',{p_period:'última semana'});if(scanError||!scanId)redirect('/?tab=radar&erro=atualizacao');
  const admin=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
- const {data:run,error:runError}=await admin.from('radar_update_runs').insert({kind:'manual',status:'running',requested_by:user.id,started_at:new Date().toISOString()}).select('id').single();
+ const {data:run,error:runError}=await admin.from('radar_update_runs').insert({kind:'manual',status:'running',requested_by:user.id,started_at:new Date().toISOString(),summary:analysisDeferred?{analysis_deferred:true}:undefined}).select('id').single();
  if(runError||!run){await admin.from('scans').update({status:'erro',finished_at:new Date().toISOString()}).eq('id',scanId);redirect('/?tab=radar&erro=atualizacao');}
  const {data:tasks}=await admin.from('scan_sources').select('source_id,status').eq('scan_id',scanId);
  const taskRows=tasks||[];
@@ -27,11 +27,14 @@ export async function requestRadarUpdate(){
  const executionId=run.id as string;
  after(async()=>{
   const outcomes=await Promise.allSettled(Array.from({length:Math.max(taskRows.filter(task=>task.status==='na fila').length,1)},()=>processScanSource(admin,scanId)));
-  await finalizeRadarUpdateRun(admin,executionId,scanId,outcomes);
+  await finalizeRadarUpdateRun(admin,executionId,scanId,outcomes,analysisDeferred);
   revalidatePath('/');
  });
  revalidatePath('/');redirect(`/?tab=radar&execucao=${executionId}`);
 }
+
+export async function requestRadarUpdate(){return runRadarUpdate(false);}
+export async function requestRadarSourcesOnly(){return runRadarUpdate(true);}
 
 export async function resumeRadarAnalysisQueue(){
  if(!configured())redirect('/login');

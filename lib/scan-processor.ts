@@ -94,8 +94,9 @@ export async function processScanSource(db:SupabaseClient,scanId?:string,fetcher
   try{
    const catalog=await syncCandidatesToRadar(db,{id:source.id,name:source.name},candidates as Record<string,unknown>[]);
    return {status:'concluída' as const,sourceId:source.id,count:candidates.length,catalog};
-  }catch{
-   return {status:'concluída' as const,sourceId:source.id,count:candidates.length,catalogSync:'erro' as const};
+  }catch(error){
+   const detail=error instanceof Error?error.message:'Erro desconhecido na sincronização do catálogo.';
+   return {status:'concluída' as const,sourceId:source.id,count:candidates.length,catalogSync:'erro' as const,catalogSyncError:detail.slice(0,300)};
   }
  }catch(error){
   const detail=error instanceof Error?error.message:'Erro de processamento.';
