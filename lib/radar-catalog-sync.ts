@@ -2,76 +2,81 @@ import type {SupabaseClient} from '@supabase/supabase-js';
 import {createHash} from 'node:crypto';
 
 type Candidate=Record<string,unknown>;
+type Normalized={item:Candidate;title:string;code:string|null;program:string|null;deadline:string|null;opening:string|null;status:'open'|'closed';officialUrl:string|null;documentUrl:string|null;externalId:string|null;sourceHash:string;canonicalKey:string;contentHash:string;urls:string[];regions:string[];existing:Record<string,any>|null};
 const text=(...values:unknown[])=>values.find(value=>typeof value==='string'&&value.trim()) as string|undefined;
-const date=(value:unknown)=>{if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}/.test(value))return null;const parsed=new Date(`${value.slice(0,10)}T00:00:00Z`);return Number.isNaN(parsed.getTime())?null:value.slice(0,10);};
-const safeUrl=(value:unknown)=>{if(typeof value!=='string')return null;try{const url=new URL(value);return url.protocol==='https:'?url.toString():null;}catch{return null;}};
+const date=(value:unknown)=>{if(typeof value!=='string'||!/^(\d{4}-\d{2}-\d{2})/.test(value))return null;const parsed=new Date(`${value.slice(0,10)}T00:00:00Z`);return Number.isNaN(parsed.getTime())?null:value.slice(0,10);};
+const safeUrl=(value:unknown)=>{if(typeof value!=='string')return null;try{const url=new URL(value);return url.protocol==='https:'&&!url.username&&!url.password?url.toString():null;}catch{return null;}};
 const isPdf=(value:string)=>{try{const url=new URL(value);return url.pathname.toLowerCase().endsWith('.pdf')||[url.searchParams.get('filename'),url.searchParams.get('file')].some(name=>name?.toLowerCase().endsWith('.pdf'));}catch{return false;}};
 const stable=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const chunks=<T,>(items:T[],size:number)=>Array.from({length:Math.ceil(items.length/size)},(_,index)=>items.slice(index*size,(index+1)*size));
 
-/** Copies only facts present in a source listing. This does not mark notices as eligibility-analyzed. */
+/** Copies listing facts with bounded batch requests; it does not infer eligibility. */
 export async function syncCandidatesToRadar(db:SupabaseClient,source:{id:string;name:string},candidates:unknown[]){
- let inserted=0,updated=0;
+ const today=new Date().toISOString().slice(0,10),normalized:Normalized[]=[];
  for(const raw of candidates){
   if(!raw||typeof raw!=='object'||Array.isArray(raw))continue;
   const item=raw as Candidate,title=text(item.title,item.name);if(!title)continue;
-  const code=text(item.code,item.officialCode,item.externalId,item.external_id);
+  const code=text(item.code,item.officialCode,item.externalId,item.external_id)??null;
   const programValue=item.programs??item.program;
-  const program=Array.isArray(programValue)?programValue.map(x=>typeof x==='string'?x:'').filter(Boolean).join(' · '):text(programValue);
+  const program=Array.isArray(programValue)?programValue.map(x=>typeof x==='string'?x:'').filter(Boolean).join(' · ')||null:text(programValue)??null;
   const deadline=date(item.endsAt??item.closing_date??item.deadline),opening=date(item.startsAt??item.opening_date);
   const sourceState=text(item.sourceState,item.source_state,item.status)?.toLowerCase();
-  const status=sourceState?.includes('fech')||sourceState?.includes('clos')||Boolean(deadline&&deadline<new Date().toISOString().slice(0,10))?'closed':'open';
-  const officialUrl=safeUrl(item.officialUrl??item.official_url??item.url??item.documentUrl??item.document_url);
-  const candidateRegion=text(item.region,item.eligibleRegion,item.eligible_region);
-  const region=candidateRegion&&!/^(informação não identificada|não identificável)/i.test(candidateRegion.trim())?candidateRegion:null;
-  // Prefer the official code. Without it, scope identity to this source and its stable external ID.
-  const identity=code?`official-code:${code.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim()}`:`source:${source.id}:${text(item.externalId,item.external_id)??stable(title)}`;
-  const canonicalKey=stable(identity);
-  const {data:existing,error:lookupError}=await db.from('radar_notices').select('id,program,opening_date,deadline,eligible_regions,official_url').eq('canonical_key',canonicalKey).maybeSingle();
-  if(lookupError)throw new Error('radar_catalog_lookup_failed');
-  // A listing's geographic label is not necessarily the notice's eligible territory.
-  // Keep it in the source snapshot/hash, but only populate eligible_regions from a cited PDF analysis.
-  const regions=existing?.eligible_regions||[];
-  const payload={canonical_key:canonicalKey,official_code:code??null,title,program:program??existing?.program??null,status,opening_date:opening??existing?.opening_date??null,deadline:deadline??existing?.deadline??null,eligible_regions:regions,official_url:officialUrl??existing?.official_url??null,last_seen_at:new Date().toISOString(),updated_at:new Date().toISOString()};
-  const {data:notice,error:noticeError}=await db.from('radar_notices').upsert(payload,{onConflict:'canonical_key'}).select('id').single();
-  if(noticeError||!notice)throw new Error('radar_catalog_write_failed');
-  if(existing)updated++;else inserted++;
-  const sourceHash=text(item.contentHash,item.content_hash)??stable(item);
-  const {data:candidate}=await db.from('source_candidates').select('id').eq('source_id',source.id).eq('external_id',text(item.externalId,item.external_id)??'').maybeSingle();
-  const sourceLink={notice_id:notice.id,source_id:source.id,candidate_id:candidate?.id??null,official_url:officialUrl,document_url:safeUrl(item.documentUrl??item.document_url),source_title:title,source_code:code??null,last_observed_hash:sourceHash,last_observed_at:new Date().toISOString(),updated_at:new Date().toISOString()};
-  const {error:linkError}=await db.from('radar_notice_sources').upsert(sourceLink,{onConflict:'source_id,candidate_id'});
-  if(linkError)throw new Error('radar_catalog_source_link_failed');
-  const urls=new Set<string>();const primary=safeUrl(item.documentUrl??item.document_url);if(primary)urls.add(primary);
+  const status:Normalized['status']=sourceState?.includes('fech')||sourceState?.includes('clos')||Boolean(deadline&&deadline<today)?'closed':'open';
+  const officialUrl=safeUrl(item.officialUrl??item.official_url??item.url??item.documentUrl??item.document_url),documentUrl=safeUrl(item.documentUrl??item.document_url);
+  const observedRegion=text(item.region,item.eligibleRegion,item.eligible_region);
+  const regions=observedRegion&&!/^(informação não identificada|não identificável)/i.test(observedRegion.trim())?[observedRegion]:[];
+  const externalId=text(item.externalId,item.external_id)??null;
+  const identity=code?`official-code:${code.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim()}`:`source:${source.id}:${externalId??stable(title)}`;
+  const canonicalKey=stable(identity),urls=new Set<string>();if(documentUrl)urls.add(documentUrl);
   const documents=Array.isArray(item.documents)?item.documents:[];
   for(const document of documents){const url=typeof document==='string'?safeUrl(document):document&&typeof document==='object'?safeUrl((document as Candidate).url??(document as Candidate).documentUrl??(document as Candidate).document_url):null;if(url)urls.add(url);}
-  const snapshot={...item,source_name:source.name,source_id:source.id,listing_only:true};
-  const contentHash=stable({canonicalKey,title,program:program??existing?.program??null,status,opening:opening??existing?.opening_date??null,deadline:deadline??existing?.deadline??null,observedRegion:region??null,officialUrl:officialUrl??existing?.official_url??null,documents:[...urls].sort()});
-  const {data:version,error:versionError}=await db.from('radar_notice_versions').upsert({notice_id:notice.id,content_hash:contentHash,snapshot,status,detected_at:new Date().toISOString()},{onConflict:'notice_id,content_hash',ignoreDuplicates:true}).select('id').maybeSingle();
-  if(versionError)throw new Error('radar_catalog_version_failed');
-  let versionId=version?.id as string|undefined;
-  if(!versionId){const {data:found,error}=await db.from('radar_notice_versions').select('id').eq('notice_id',notice.id).eq('content_hash',contentHash).single();if(error||!found)throw new Error('radar_catalog_version_lookup_failed');versionId=found.id;}
-  for(const url of urls){const isPrimary=url===primary;const pdf=isPdf(url);const kind=isPrimary?(pdf?'primary':'official_page'):'complementary';const docHash=stable(url);const name=isPrimary?(pdf?`${title} — PDF principal`:`${title} — página oficial`):url.split('/').pop()||'Documento complementar';const {error}=await db.from('radar_notice_documents').upsert({version_id:versionId,kind,name,official_url:url,content_hash:docHash,extraction_status:pdf?'pending':'unsupported'},{onConflict:'version_id,content_hash',ignoreDuplicates:true});if(error)throw new Error('radar_catalog_document_write_failed');}
-  const {data:queuedAnalysis,error:analysisLookupError}=await db.from('radar_notice_analyses').select('id,status').eq('version_id',versionId).maybeSingle();
-  if(analysisLookupError)throw new Error('radar_analysis_queue_lookup_failed');
-  let insertedAnalysis=false;
-  if(!queuedAnalysis&&status==='open'){
-   const {error:queueError}=await db.from('radar_notice_analyses').insert({version_id:versionId,status:'pending',facts:{},source_references:[]});
-   if(queueError)throw new Error('radar_analysis_queue_write_failed');
-   insertedAnalysis=true;
+  const sourceHash=text(item.contentHash,item.content_hash)??stable(item),urlList=[...urls].sort();
+  normalized.push({item,title,code,program,deadline,opening,status,officialUrl,documentUrl,externalId,sourceHash,canonicalKey,contentHash:'',urls:urlList,regions,existing:null});
+ }
+ const deduplicated=new Map<string,Normalized>();for(const row of normalized)deduplicated.set(row.canonicalKey,row);normalized.splice(0,normalized.length,...deduplicated.values());
+ let inserted=0,updated=0;
+ for(const group of chunks(normalized,100)){
+  const keys=group.map(row=>row.canonicalKey);
+  const {data:existingRows,error:lookupError}=await db.from('radar_notices').select('*').in('canonical_key',keys);
+  if(lookupError||!existingRows)throw new Error('radar_catalog_lookup_failed');
+  const existingByKey=new Map(existingRows.map((row:any)=>[row.canonical_key,row]));
+  const notices=group.map(row=>{
+   const existing=existingByKey.get(row.canonicalKey) as Record<string,any>|undefined;row.existing=existing??null;
+   const contentHash=stable({canonicalKey:row.canonicalKey,title:row.title,program:row.program??existing?.program??null,status:row.status,opening:row.opening??existing?.opening_date??null,deadline:row.deadline??existing?.deadline??null,observedRegion:row.regions[0]??null,officialUrl:row.officialUrl??existing?.official_url??null,documents:row.urls});row.contentHash=contentHash;
+   if(existing)updated++;else inserted++;
+   const now=new Date().toISOString();return {id:existing?.id,canonical_key:row.canonicalKey,official_code:row.code,title:row.title,program:row.program??existing?.program??null,status:row.status,analysis_status:existing?.analysis_status??'pending',opening_date:row.opening??existing?.opening_date??null,deadline:row.deadline??existing?.deadline??null,eligible_regions:existing?.eligible_regions??[],beneficiaries:existing?.beneficiaries??[],eligible_sectors:existing?.eligible_sectors??[],eligible_caes:existing?.eligible_caes??[],investment_minimum:existing?.investment_minimum??null,investment_maximum:existing?.investment_maximum??null,funding_rate:existing?.funding_rate??null,eligible_expenses:existing?.eligible_expenses??[],ineligible_expenses:existing?.ineligible_expenses??[],spending_conditions:existing?.spending_conditions??[],partnership_required:existing?.partnership_required??null,rd_requirement:existing?.rd_requirement??'unidentified',short_summary:existing?.short_summary??null,official_url:row.officialUrl??existing?.official_url??null,extraction_confidence:existing?.extraction_confidence??null,first_seen_at:existing?.first_seen_at??now,last_seen_at:now,last_analyzed_at:existing?.last_analyzed_at??null,updated_at:now};
+  });
+  const {data:written,error:noticeError}=await db.from('radar_notices').upsert(notices,{onConflict:'canonical_key'}).select('id,canonical_key');
+  if(noticeError||!written)throw new Error('radar_catalog_write_failed');
+  const noticeIdByKey=new Map(written.map((row:any)=>[row.canonical_key,row.id]));
+  const externalIds=group.map(row=>row.externalId).filter((value):value is string=>Boolean(value));
+  const {data:candidateRows,error:candidateError}=externalIds.length?await db.from('source_candidates').select('id,external_id').eq('source_id',source.id).in('external_id',externalIds):{data:[],error:null};
+  if(candidateError)throw new Error('radar_source_candidate_lookup_failed');
+  const candidateIdByExternal=new Map((candidateRows||[]).map((row:any)=>[row.external_id,row.id]));
+  const now=new Date().toISOString();
+  const links=group.map(row=>({notice_id:noticeIdByKey.get(row.canonicalKey),source_id:source.id,candidate_id:row.externalId?candidateIdByExternal.get(row.externalId)??null:null,official_url:row.officialUrl,document_url:row.documentUrl,source_title:row.title,source_code:row.code,last_observed_hash:row.sourceHash,last_observed_at:now,updated_at:now})).filter(row=>row.notice_id);
+  if(links.length){const {error}=await db.from('radar_notice_sources').upsert(links,{onConflict:'source_id,candidate_id'});if(error)throw new Error('radar_catalog_source_link_failed');}
+  const versions=group.map(row=>({notice_id:noticeIdByKey.get(row.canonicalKey),content_hash:row.contentHash,snapshot:{...row.item,source_name:source.name,source_id:source.id,listing_only:true},status:row.status,detected_at:now})).filter(row=>row.notice_id);
+  if(versions.length){const {error}=await db.from('radar_notice_versions').upsert(versions,{onConflict:'notice_id,content_hash',ignoreDuplicates:true});if(error)throw new Error('radar_catalog_version_failed');}
+  const noticeIds=[...new Set(versions.map(row=>row.notice_id as string))];
+  const {data:versionRows,error:versionLookupError}=noticeIds.length?await db.from('radar_notice_versions').select('id,notice_id,content_hash,detected_at,status').in('notice_id',noticeIds).order('detected_at',{ascending:false}).order('id',{ascending:false}):{data:[],error:null};
+  if(versionLookupError)throw new Error('radar_catalog_version_lookup_failed');
+  const versionByKey=new Map((versionRows||[]).map((row:any)=>[`${row.notice_id}:${row.content_hash}`,row]));
+  const latestByNotice=new Map<string,any>();for(const version of versionRows||[])if(!latestByNotice.has(version.notice_id))latestByNotice.set(version.notice_id,version);
+  const documentsToSave:{version_id:string;kind:string;name:string;official_url:string;content_hash:string;extraction_status:string}[]=[];
+  const queueRows:{version_id:string;status:string;facts:Record<string,never>;source_references:never[]}[]=[];
+  const closedVersionIds:string[]=[],openPendingNoticeIds:string[]=[];
+  for(const row of group){const noticeId=noticeIdByKey.get(row.canonicalKey);if(!noticeId)continue;const version=versionByKey.get(`${noticeId}:${row.contentHash}`),latest=latestByNotice.get(noticeId);if(!version)throw new Error('radar_catalog_version_lookup_failed');
+   for(const url of row.urls){const primary=url===row.documentUrl,pdf=isPdf(url),kind=primary?(pdf?'primary':'official_page'):'complementary';documentsToSave.push({version_id:version.id,kind,name:primary?`${row.title} — ${pdf?'PDF principal':'página oficial'}`:url.split('/').pop()||'Documento complementar',official_url:url,content_hash:stable(url),extraction_status:pdf?'pending':'unsupported'});}
+   if(version.id===latest?.id&&row.status==='open')queueRows.push({version_id:version.id,status:'pending',facts:{},source_references:[]});
+   if(version.id===latest?.id&&row.status==='closed')closedVersionIds.push(version.id);
   }
-  const {data:latestVersion,error:latestVersionError}=await db.from('radar_notice_versions').select('id').eq('notice_id',notice.id).order('detected_at',{ascending:false}).order('id',{ascending:false}).limit(1).maybeSingle();
-  if(latestVersionError)throw new Error('radar_latest_version_lookup_failed');
-  const isLatestVersion=latestVersion?.id===versionId;
-  if(status==='open'&&isLatestVersion&&(insertedAnalysis||queuedAnalysis?.status==='pending')){
-   const {error:pendingError}=await db.from('radar_notices').update({analysis_status:'pending',eligible_regions:[],beneficiaries:[],eligible_sectors:[],eligible_caes:[],investment_minimum:null,investment_maximum:null,funding_rate:null,eligible_expenses:[],ineligible_expenses:[],spending_conditions:[],partnership_required:null,rd_requirement:'unidentified',short_summary:null,extraction_confidence:null,last_analyzed_at:null,updated_at:new Date().toISOString()}).eq('id',notice.id);
-   if(pendingError)throw new Error('radar_notice_pending_status_failed');
+  if(documentsToSave.length){const {error}=await db.from('radar_notice_documents').upsert(documentsToSave,{onConflict:'version_id,content_hash',ignoreDuplicates:true});if(error)throw new Error('radar_catalog_document_write_failed');}
+  if(queueRows.length){const ids=queueRows.map(row=>row.version_id);const {data:analyses,error}=await db.from('radar_notice_analyses').select('version_id,status').in('version_id',ids);if(error)throw new Error('radar_analysis_queue_lookup_failed');const existingAnalyses=new Map((analyses||[]).map((row:any)=>[row.version_id,row.status]));const missing=queueRows.filter(row=>!existingAnalyses.has(row.version_id));if(missing.length){const {error:queueError}=await db.from('radar_notice_analyses').upsert(missing,{onConflict:'version_id',ignoreDuplicates:true});if(queueError)throw new Error('radar_analysis_queue_write_failed');}
+   for(const notice of group){const id=noticeIdByKey.get(notice.canonicalKey);if(!id)continue;const latest=latestByNotice.get(id);if(latest&&latest.status==='open'&&(existingAnalyses.get(latest.id)==='pending'||!existingAnalyses.has(latest.id)))openPendingNoticeIds.push(id);}
   }
-  if(status==='closed'&&queuedAnalysis?.status==='pending'){
-   const {error:closeQueueError}=await db.from('radar_notice_analyses').update({status:'incomplete',error_code:'notice_closed_before_analysis',finished_at:new Date().toISOString()}).eq('id',queuedAnalysis.id).eq('status','pending');
-   if(closeQueueError)throw new Error('radar_analysis_close_queue_failed');
-   const {error:closeNoticeError}=await db.from('radar_notices').update({analysis_status:'incomplete',updated_at:new Date().toISOString()}).eq('id',notice.id);
-   if(closeNoticeError)throw new Error('radar_notice_close_analysis_status_failed');
-  }
-  // A source listing is not evidence for beneficiaries, expenses, funding rate, or eligibility.
+  if(openPendingNoticeIds.length){const unique=[...new Set(openPendingNoticeIds)];const {error}=await db.from('radar_notices').update({analysis_status:'pending',eligible_regions:[],beneficiaries:[],eligible_sectors:[],eligible_caes:[],investment_minimum:null,investment_maximum:null,funding_rate:null,eligible_expenses:[],ineligible_expenses:[],spending_conditions:[],partnership_required:null,rd_requirement:'unidentified',short_summary:null,extraction_confidence:null,last_analyzed_at:null,updated_at:now}).in('id',unique);if(error)throw new Error('radar_notice_pending_status_failed');}
+  if(closedVersionIds.length){const {error:closeQueueError}=await db.from('radar_notice_analyses').update({status:'incomplete',error_code:'notice_closed_before_analysis',finished_at:now,lease_until:null}).in('version_id',closedVersionIds).eq('status','pending');if(closeQueueError)throw new Error('radar_analysis_close_queue_failed');const ids=[...new Set(group.filter(row=>row.status==='closed').map(row=>noticeIdByKey.get(row.canonicalKey)).filter(Boolean))] as string[];if(ids.length){const {error}=await db.from('radar_notices').update({analysis_status:'incomplete',updated_at:now}).in('id',ids);if(error)throw new Error('radar_notice_close_analysis_status_failed');}}
  }
  return {inserted,updated};
 }

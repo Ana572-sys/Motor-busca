@@ -21,7 +21,7 @@ export async function POST(request:Request){
  after(async()=>{
   const db=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
   // Keep a single Vercel invocation bounded; the durable queue resumes in the next request.
-  const outcomes=await Promise.allSettled(Array.from({length:4},()=>processScanSource(db,scanId)));
+  const outcomes=await Promise.allSettled(Array.from({length:2},()=>processScanSource(db,scanId)));
   let progress;
   try{progress=await recordRadarSourceBatch(db,runId,scanId,outcomes);}catch(error){
    const {data:run}=await db.from('radar_update_runs').select('summary').eq('id',runId).maybeSingle();
