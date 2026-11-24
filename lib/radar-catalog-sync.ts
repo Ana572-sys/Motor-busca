@@ -11,10 +11,12 @@ const safeUrl=(value:unknown)=>{if(typeof value!=='string')return null;try{const
 const isPdf=(value:string)=>{try{const url=new URL(value);return url.pathname.toLowerCase().endsWith('.pdf')||[url.searchParams.get('filename'),url.searchParams.get('file')].some(name=>name?.toLowerCase().endsWith('.pdf'));}catch{return false;}};
 const stable=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const chunks=<T,>(items:T[],size:number)=>Array.from({length:Math.ceil(items.length/size)},(_,index)=>items.slice(index*size,(index+1)*size));
-export function sourceNoticeState(value:string|undefined,deadline:string|null,today:string):NoticeState{
+export function sourceNoticeState(value:string|undefined,deadline:string|null,today:string,opening:string|null=null):NoticeState{
  if(value&&/(fech|encerr|clos)/i.test(value))return 'closed';
- if(value&&/(abert|open)/i.test(value))return 'open';
  if(deadline&&deadline<today)return 'closed';
+ if(opening&&opening>today)return 'unconfirmed';
+ if(value&&/(abert|open)/i.test(value))return 'open';
+ if(opening&&deadline&&opening<=today&&deadline>=today)return 'open';
  return 'unconfirmed';
 }
 export function catalogNoticeId(existingId:unknown):string{return typeof existingId==='string'&&existingId.trim()?existingId:randomUUID();}
@@ -30,7 +32,7 @@ export async function syncCandidatesToRadar(db:SupabaseClient,source:{id:string;
   const program=Array.isArray(programValue)?programValue.map(x=>typeof x==='string'?x:'').filter(Boolean).join(' · ')||null:text(programValue)??null;
   const deadline=date(item.endsAt??item.closing_date??item.deadline),opening=date(item.startsAt??item.opening_date);
   const sourceState=text(item.sourceState,item.source_state,item.status)?.toLowerCase();
-  const status=/suspens[aã]o/i.test(code||'')?'unconfirmed':sourceNoticeState(sourceState,deadline,today);
+  const status=/suspens[aã]o/i.test(code||'')?'unconfirmed':sourceNoticeState(sourceState,deadline,today,opening);
   const officialUrl=safeUrl(item.officialUrl??item.official_url??item.url??item.documentUrl??item.document_url),documentUrl=safeUrl(item.documentUrl??item.document_url);
   const observedRegion=text(item.region,item.eligibleRegion,item.eligible_region);
   const regions=observedRegion&&!/^(informação não identificada|não identificável)/i.test(observedRegion.trim())?[observedRegion]:[];
@@ -73,11 +75,11 @@ export async function syncCandidatesToRadar(db:SupabaseClient,source:{id:string;
   const affectedNoticeIds=[...new Set(links.map(row=>row.notice_id as string))];
   const {data:linkedStates,error:linkedStateError}=affectedNoticeIds.length?await db.from('radar_notice_sources').select('notice_id,observed_status,source_code').in('notice_id',affectedNoticeIds):{data:[],error:null};
   if(linkedStateError)throw new Error('radar_catalog_state_lookup_failed');
-  const resolvedStates=new Map<string,NoticeState>();
+  const resolvedStates=new Map<string,{hasOpen:boolean;allClosed:boolean;sourceCount:number}>();
   const suspendedNoticeIds=new Set<string>();
-  for(const link of linkedStates||[]){if(/suspens[aã]o/i.test(link.source_code||''))suspendedNoticeIds.add(link.notice_id);const current=resolvedStates.get(link.notice_id);if(link.observed_status==='open')resolvedStates.set(link.notice_id,'open');else if(!current)resolvedStates.set(link.notice_id,link.observed_status as NoticeState);else if(current!=='open'&&link.observed_status!=='closed')resolvedStates.set(link.notice_id,'unconfirmed');}
+  for(const link of linkedStates||[]){if(/suspens[aã]o/i.test(link.source_code||''))suspendedNoticeIds.add(link.notice_id);const current=resolvedStates.get(link.notice_id)||{hasOpen:false,allClosed:true,sourceCount:0};current.sourceCount++;if(link.observed_status==='open')current.hasOpen=true;if(link.observed_status!=='closed')current.allClosed=false;resolvedStates.set(link.notice_id,current);}
   const statusIds=new Map<NoticeState,string[]>([['open',[]],['closed',[]],['unconfirmed',[]]]);
-  for(const notice of group){const noticeId=noticeIdByKey.get(notice.canonicalKey);if(!noticeId)continue;const resolved=resolvedStates.get(noticeId)||notice.status;const deadlineExpired=Boolean(notice.deadline&&notice.deadline<today);const status:NoticeState=suspendedNoticeIds.has(noticeId)?'unconfirmed':deadlineExpired?'closed':resolved;statusIds.get(status)!.push(noticeId);notice.status=status;}
+  for(const notice of group){const noticeId=noticeIdByKey.get(notice.canonicalKey);if(!noticeId)continue;const sourceState=resolvedStates.get(noticeId),deadline=notice.deadline??notice.existing?.deadline??null,deadlineExpired=Boolean(deadline&&deadline<today);const status:NoticeState=suspendedNoticeIds.has(noticeId)?'unconfirmed':deadlineExpired?'closed':sourceState?.hasOpen?'open':sourceState?.sourceCount&&sourceState.allClosed?'closed':'unconfirmed';statusIds.get(status)!.push(noticeId);notice.status=status;notice.contentHash=stable({canonicalKey:notice.canonicalKey,title:notice.title,program:notice.program??notice.existing?.program??null,status,opening:notice.opening??notice.existing?.opening_date??null,deadline:notice.deadline??notice.existing?.deadline??null,observedRegion:notice.regions[0]??null,officialUrl:notice.officialUrl??notice.existing?.official_url??null,documents:notice.urls});}
   for(const [status,ids] of statusIds){if(!ids.length)continue;const {error}=await db.from('radar_notices').update({status,...(status==='closed'?{closed_detected_at:now}:{}),updated_at:now}).in('id',ids);if(error)throw new Error('radar_catalog_state_write_failed');}
   const versions=group.map(row=>({notice_id:noticeIdByKey.get(row.canonicalKey),content_hash:row.contentHash,snapshot:{...row.item,source_observations:row.observations,source_name:source.name,source_id:source.id,listing_only:true},status:row.status,detected_at:now})).filter(row=>row.notice_id);
   if(versions.length){const {error}=await db.from('radar_notice_versions').upsert(versions,{onConflict:'notice_id,content_hash',ignoreDuplicates:true});if(error)throw new Error('radar_catalog_version_failed');}
