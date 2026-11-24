@@ -1,5 +1,5 @@
 import type {SupabaseClient} from '@supabase/supabase-js';
-import {createHash} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 
 type Candidate=Record<string,unknown>;
 type NoticeState='open'|'closed'|'unconfirmed';
@@ -17,6 +17,7 @@ export function sourceNoticeState(value:string|undefined,deadline:string|null,to
  if(deadline&&deadline<today)return 'closed';
  return 'unconfirmed';
 }
+export function catalogNoticeId(existingId:unknown):string{return typeof existingId==='string'&&existingId.trim()?existingId:randomUUID();}
 
 /** Copies listing facts with bounded batch requests; it does not infer eligibility. */
 export async function syncCandidatesToRadar(db:SupabaseClient,source:{id:string;name:string},candidates:unknown[]){
@@ -54,7 +55,7 @@ export async function syncCandidatesToRadar(db:SupabaseClient,source:{id:string;
    const existing=existingByKey.get(row.canonicalKey) as Record<string,any>|undefined;row.existing=existing??null;
    const contentHash=stable({canonicalKey:row.canonicalKey,title:row.title,program:row.program??existing?.program??null,status:row.status,opening:row.opening??existing?.opening_date??null,deadline:row.deadline??existing?.deadline??null,observedRegion:row.regions[0]??null,officialUrl:row.officialUrl??existing?.official_url??null,documents:row.urls});row.contentHash=contentHash;
    if(existing)updated++;else inserted++;
-   const now=new Date().toISOString();return {id:existing?.id,canonical_key:row.canonicalKey,official_code:row.code,title:row.title,program:row.program??existing?.program??null,status:row.status,analysis_status:existing?.analysis_status??'pending',opening_date:row.opening??existing?.opening_date??null,deadline:row.deadline??existing?.deadline??null,eligible_regions:existing?.eligible_regions??[],beneficiaries:existing?.beneficiaries??[],eligible_sectors:existing?.eligible_sectors??[],eligible_caes:existing?.eligible_caes??[],investment_minimum:existing?.investment_minimum??null,investment_maximum:existing?.investment_maximum??null,funding_rate:existing?.funding_rate??null,eligible_expenses:existing?.eligible_expenses??[],ineligible_expenses:existing?.ineligible_expenses??[],spending_conditions:existing?.spending_conditions??[],partnership_required:existing?.partnership_required??null,rd_requirement:existing?.rd_requirement??'unidentified',short_summary:existing?.short_summary??null,official_url:row.officialUrl??existing?.official_url??null,extraction_confidence:existing?.extraction_confidence??null,first_seen_at:existing?.first_seen_at??now,last_seen_at:now,last_analyzed_at:existing?.last_analyzed_at??null,updated_at:now};
+   const now=new Date().toISOString();return {id:catalogNoticeId(existing?.id),canonical_key:row.canonicalKey,official_code:row.code,title:row.title,program:row.program??existing?.program??null,status:row.status,analysis_status:existing?.analysis_status??'pending',opening_date:row.opening??existing?.opening_date??null,deadline:row.deadline??existing?.deadline??null,eligible_regions:existing?.eligible_regions??[],beneficiaries:existing?.beneficiaries??[],eligible_sectors:existing?.eligible_sectors??[],eligible_caes:existing?.eligible_caes??[],investment_minimum:existing?.investment_minimum??null,investment_maximum:existing?.investment_maximum??null,funding_rate:existing?.funding_rate??null,eligible_expenses:existing?.eligible_expenses??[],ineligible_expenses:existing?.ineligible_expenses??[],spending_conditions:existing?.spending_conditions??[],partnership_required:existing?.partnership_required??null,rd_requirement:existing?.rd_requirement??'unidentified',short_summary:existing?.short_summary??null,official_url:row.officialUrl??existing?.official_url??null,extraction_confidence:existing?.extraction_confidence??null,first_seen_at:existing?.first_seen_at??now,last_seen_at:now,last_analyzed_at:existing?.last_analyzed_at??null,updated_at:now};
   });
   const {data:written,error:noticeError}=await db.from('radar_notices').upsert(notices,{onConflict:'canonical_key'}).select('id,canonical_key');
   if(noticeError||!written){
