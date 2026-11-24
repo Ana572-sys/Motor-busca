@@ -11,7 +11,7 @@ function parseCandidate(input:unknown,state:'aberto'|'encerrado',origin:string):
  const programs=Array.isArray(row.estrutura)?[...new Set(row.estrutura.map(x=>str(record(x).programaOperacionalDesignacao)).filter((x):x is string=>x!==null))].sort():[];
  return {externalId:String(id),code,title,updatedAt:str(notice.dataUltimaAlteracao),publishedAt:str(calendar.dataPublicacao),startsAt:str(calendar.dataInicio),endsAt:str(calendar.dataFimAtual)||str(calendar.dataFim),programs,documents,sourceState:state};
 }
-async function fetchFeed(origin:string,programId:string|null,state:'aberto'|'encerrado',fetcher:typeof fetch):Promise<PessoasCandidate[]>{
+async function fetchFeed(origin:string,programId:string|null,state:'aberto'|'encerrado',fetcher:typeof fetch,apiOrigin=origin):Promise<PessoasCandidate[]>{
  const entries:PessoasCandidate[]=[],ids=new Set<string>(),deadline=Date.now()+35000;
  const pageSize=origin==='https://pessoas2030.gov.pt'?1:3;
  const fetchPage=async(page:number):Promise<unknown[]>=>{
@@ -19,7 +19,7 @@ async function fetchFeed(origin:string,programId:string|null,state:'aberto'|'enc
   let response:Response|undefined,lastError:unknown;
   for(let attempt=0;attempt<3;attempt++){
    try{
-    response=await fetcher(new URL('/wp-json/avisos/query',origin),{method:'POST',redirect:'error',signal:AbortSignal.timeout(15000),headers:{'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json','User-Agent':'Crowe-GI-Radar/0.1 (consulta de avisos)'},body:form});
+    response=await fetcher(new URL('/wp-json/avisos/query',apiOrigin),{method:'POST',redirect:'error',signal:AbortSignal.timeout(15000),headers:{'Content-Type':'application/x-www-form-urlencoded','Accept':'application/json','User-Agent':'Crowe-GI-Radar/0.1 (consulta de avisos)'},body:form});
     if(response.status<500&&response.status!==429)break;
     lastError=new Error(`HTTP ${response.status}`);
    }catch(error){lastError=error;}
@@ -53,7 +53,12 @@ async function fetchFeed(origin:string,programId:string|null,state:'aberto'|'enc
  }
  throw new Error('A listagem excedeu o limite de páginas; não foi considerada completa.');
 }
-export async function fetchPessoas(state:'aberto'|'encerrado',fetcher:typeof fetch=fetch){return fetchFeed('https://pessoas2030.gov.pt','102',state,fetcher);}
+export async function fetchPessoas(state:'aberto'|'encerrado',fetcher:typeof fetch=fetch){
+ // The Pessoas 2030 host intermittently rejects outbound requests from serverless runtimes.
+ // Its official listing endpoint is also exposed by the Portugal 2030 portal; keep the
+ // Pessoas 2030 origin for document links while querying the more reliable shared API.
+ return fetchFeed('https://pessoas2030.gov.pt','102',state,fetcher,'https://portugal2030.pt');
+}
 export async function fetchPortugal2030(state:'aberto'|'encerrado',fetcher:typeof fetch=fetch){return fetchFeed('https://portugal2030.pt',null,state,fetcher);}
 const regional={
  norte:{origin:'https://portugal2030.pt',id:'103',program:'Programa Regional do Norte 2021-2027'},
